@@ -22,7 +22,7 @@ export async function fakeOneDrive(page: Page) {
   add("Beta", root.id, true);
   add("readme.txt", root.id, false);
 
-  const state = { failList: false, failUploadName: "", delayMs: 0 };
+  const state = { failList: false, failUploadName: "", delayMs: 0, slowFolder: "" };
   const children = (id: string) => [...nodes.values()].filter((n) => n.parent === id);
   const exists = (parent: string, name: string, except?: string) =>
     children(parent).some((n) => n.name.toLowerCase() === name.toLowerCase() && n.id !== except);
@@ -58,6 +58,7 @@ export async function fakeOneDrive(page: Page) {
     }
     if ((m = path.match(/^\/drives\/D\/items\/([^/:]+)\/children$/))) {
       if (method === "GET") {
+        if (nodes.get(m[1])?.name === state.slowFolder) await new Promise((r) => setTimeout(r, 1500));
         if (state.failList) return json(route, { error: { code: "generalException", message: "Server exploded" } }, 500);
         return json(route, { value: children(m[1]).map(dto) });
       }

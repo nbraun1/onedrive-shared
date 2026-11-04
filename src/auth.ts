@@ -1,4 +1,5 @@
-import { InteractionRequiredAuthError, PublicClientApplication } from "@azure/msal-browser";
+import { BrowserAuthError, InteractionRequiredAuthError, PublicClientApplication } from "@azure/msal-browser";
+import { broadcastResponseToMainFrame } from "@azure/msal-browser/redirect-bridge";
 
 const SCOPES = ["Files.ReadWrite.All"];
 let msal: PublicClientApplication | undefined;
@@ -15,6 +16,11 @@ export const hasTestToken = () => !!testToken();
 /** Finishes a pending sign-in redirect. Returns true when the user is signed in. */
 export async function initAuth(clientId: string): Promise<boolean> {
   if (testToken()) return true;
+  // MSAL v5 renews tokens in a hidden iframe pointed at this page; it waits for the page to hand back the response.
+  if (window.parent !== window) {
+    await broadcastResponseToMainFrame();
+    return false;
+  }
   msal = new PublicClientApplication({
     auth: {
       clientId,
@@ -32,6 +38,10 @@ export async function initAuth(clientId: string): Promise<boolean> {
 
 export const signIn = () => msal!.loginRedirect({ scopes: SCOPES });
 
+export async function signOut() {
+  if (!testToken()) await msal!.logoutRedirect();
+}
+
 export async function getToken(forceRefresh = false): Promise<string> {
   const t = testToken();
   if (t) return t;
@@ -43,7 +53,8 @@ export async function getToken(forceRefresh = false): Promise<string> {
   try {
     return (await msal!.acquireTokenSilent({ scopes: SCOPES, account, forceRefresh })).accessToken;
   } catch (e) {
-    if (e instanceof InteractionRequiredAuthError) {
+    // A failed iframe renewal (e.g. timed_out when Safari blocks it) also needs a real sign-in; being offline does not.
+    if (e instanceof InteractionRequiredAuthError || (e instanceof BrowserAuthError && e.errorCode !== "no_network_connectivity")) {
       await msal!.acquireTokenRedirect({ scopes: SCOPES, account });
       throw new Error("Redirecting to sign-in");
     }

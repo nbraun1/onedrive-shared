@@ -1,5 +1,5 @@
 import "./style.css";
-import { getToken, hasTestToken, initAuth, signIn } from "./auth";
+import { getToken, hasTestToken, initAuth, signIn, signOut } from "./auth";
 import { createGraph, errorText, type DriveItem } from "./graph";
 import { canMoveInto } from "./moveRules";
 import { validateName, validateShareLink } from "./shareLink";
@@ -245,14 +245,35 @@ async function upload(files: File[]) {
 /* ---------- screens ---------- */
 
 async function refresh() {
+  const folder = current();
   try {
-    items = sortItems(await graph.listChildren(share!.driveId, current().id));
+    const list = sortItems(await graph.listChildren(share!.driveId, folder.id));
+    if (folder !== current()) return; // the user moved on while this loaded
+    items = list;
     status = "ready";
   } catch (e) {
+    if (folder !== current()) return;
     status = "failed";
     toast(errorText(e));
   }
   renderBrowser();
+}
+
+function forgetShare() {
+  localStorage.removeItem("share");
+  share = null;
+}
+
+function menu() {
+  const d = dialog(
+    h(
+      "div",
+      { className: "sheet" },
+      h("button", { onclick: () => (d.close(), forgetShare(), renderLink()) }, "Change link"),
+      h("button", { onclick: async () => (d.close(), forgetShare(), await signOut(), renderLink()) }, "Sign out"),
+      h("button", { onclick: () => d.close() }, "Cancel"),
+    ),
+  );
 }
 
 async function open(crumbs: Crumb[]) {
@@ -328,7 +349,7 @@ function renderBrowser() {
       {},
       crumbs,
       edit && h("button", { onclick: () => ((selected = selected ? null : new Set()), renderBrowser()) }, selected ? "Done" : "Select"),
-      h("button", { onclick: () => (localStorage.removeItem("share"), (share = null), renderLink()) }, "Change link"),
+      h("button", { "aria-label": "Menu", onclick: menu }, "☰"),
     ),
     edit ? "" : h("p", { className: "banner" }, "View-only link: you can browse but not change anything."),
     list,

@@ -46,7 +46,8 @@ test.describe("share link", () => {
     await expect(page.getByRole("button", { name: "readme.txt", exact: true })).toBeVisible();
     await page.reload();
     await expect(page.getByRole("button", { name: "readme.txt", exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Change link" }).click();
+    await page.getByRole("button", { name: "Menu" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Change link" }).click();
     await expect(page.getByLabel("Share link")).toBeVisible();
   });
 });
@@ -214,4 +215,22 @@ test("view-only link hides all changes", async ({ page }) => {
   await expect(page.getByRole("button", { name: /Actions for/ })).toHaveCount(0);
   await expect(page.getByText("New folder")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Select" })).toHaveCount(0);
+});
+
+test("a slow folder load does not replace the folder you went back to", async ({ page }) => {
+  const drive = await start(page);
+  drive.state.slowFolder = "Alpha";
+  await page.getByRole("button", { name: "Alpha", exact: true }).click();
+  await page.getByRole("navigation", { name: "Path" }).getByRole("button", { name: "Friend's folder" }).click();
+  await expect(page.getByRole("button", { name: "readme.txt", exact: true })).toBeVisible();
+  await page.waitForTimeout(2000);
+  await expect(page.getByRole("button", { name: "readme.txt", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Inner", exact: true })).toHaveCount(0);
+});
+
+test("signs out and forgets the link", async ({ page }) => {
+  await start(page);
+  await page.getByRole("button", { name: "Menu" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Sign out" }).click();
+  expect(await page.evaluate(() => localStorage.getItem("share"))).toBeNull();
 });

@@ -40,7 +40,7 @@ Until this is set, the site shows "Not configured".
 
 ## The share link
 
-The app opens the folder through the link your friend shared. You paste it once and the app remembers it on your device. Use **Change link** to switch.
+The app opens the folder through the link your friend shared. You paste it once and the app remembers it on your device. Use **☰ → Change link** to switch, **☰ → Sign out** to sign out of Microsoft on this device.
 
 **How to get it**
 
