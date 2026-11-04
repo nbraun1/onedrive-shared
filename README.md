@@ -6,6 +6,8 @@ A small web app (PWA) to manage a OneDrive folder a friend shared with you, from
 - Delete files and folders (a folder is deleted with everything in it, into the owner's OneDrive recycle bin)
 - Create folders, upload several files at once, upload whole folders (website on a desktop browser only)
 - Rename and move files and folders, one at a time or several selected at once
+- Save several share links under your own names and switch between them
+- View images, videos, audio and text files in the app (swipe or arrows to the next file, Save to Photos); thumbnails in the list
 
 It only talks to the Microsoft Graph OneDrive API, directly from your device. There is no server and no secret.
 
@@ -40,7 +42,7 @@ Until this is set, the site shows "Not configured".
 
 ## The share link
 
-The app opens the folder through the link your friend shared. You paste it once and the app remembers it on your device. Use **☰ → Change link** to switch, **☰ → Sign out** to sign out of Microsoft on this device.
+The app opens a folder through the link someone shared with you. On the **Links** screen, give the link a name (optional; the folder name is used otherwise) and paste it. The app saves it on this device and reopens the last used link on the next start. Use **☰ → Links** to switch, add, rename (`⋯` → Rename) or remove (`⋯` → Remove: only forgets the link, nothing in OneDrive changes). **☰ → Sign out** signs out of Microsoft on this device.
 
 **How to get it**
 
@@ -59,6 +61,12 @@ https://onedrive.live.com/?redeem=aHR0cHM6Ly8xZHJ2Lm1zL2YvcyFBbUJjRGVGZ2g&id=...
 - The `/f/` means a **folder**. Links with `/u/`, `/w/`, `/x/`, `/p/` and similar point to a single file and are rejected.
 - The link must allow **editing**. With a view-only link the app only lets you browse and shows "View-only link".
 - Paste the full link exactly as copied.
+
+## Viewing files
+
+Tap a file to open it full screen. Images (including iPhone HEIC photos), videos (MP4/MOV), audio and text files open in the app, as far as the browser can play them. Swipe left/right or use ‹ › to go through the folder. Anything else (PDF, Office, …) opens in OneDrive.
+
+**Save** prepares the file and then shows **Save / Share**: tap it to open the iOS share sheet ("Save Image" / "Save Video"). Files larger than 200 MB open the download directly instead, to keep the app from running out of memory.
 
 ## Security
 
@@ -84,7 +92,8 @@ Every push to `main` runs both test suites, builds, and deploys to GitHub Pages 
 | Action | Call |
 |---|---|
 | Open share link | `GET /shares/{u!base64url(link)}/driveItem` (`Prefer: redeemSharingLink`), `GET /shares/{token}/permission` |
-| List folder | `GET /drives/{driveId}/items/{id}/children` (follows `@odata.nextLink`) |
+| List folder | `GET /drives/{driveId}/items/{id}/children?$expand=thumbnails` (follows `@odata.nextLink`) |
+| View / save a file | `GET /drives/{driveId}/items/{id}?$select=id,@microsoft.graph.downloadUrl`, then the short-lived download URL directly |
 | Delete | `DELETE /drives/{driveId}/items/{id}` |
 | Rename / move | `PATCH /drives/{driveId}/items/{id}` with `name` / `parentReference.id` |
 | New folder | `POST /drives/{driveId}/items/{parentId}/children` |
