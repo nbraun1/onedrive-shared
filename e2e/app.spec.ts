@@ -70,6 +70,28 @@ test("shows an error instead of a blank screen when listing fails", async ({ pag
   await page.getByRole("button", { name: "Alpha", exact: true }).click();
   await expect(toast(page)).toContainText("Server exploded");
   await expect(page.getByRole("navigation", { name: "Path" })).toBeVisible();
+  await expect(page.getByText("This folder is empty")).toHaveCount(0);
+});
+
+test("says Loading, not empty, while a folder loads", async ({ page }) => {
+  const drive = await start(page);
+  drive.state.delayMs = 1500;
+  await page.getByRole("button", { name: "Beta", exact: true }).click();
+  await expect(page.getByText("Loading…")).toBeVisible();
+  await expect(page.getByText("This folder is empty")).toBeVisible();
+});
+
+test("blocks a second batch while one is running", async ({ page }) => {
+  const drive = await start(page);
+  await page.getByRole("button", { name: "Select" }).click();
+  await page.getByRole("checkbox", { name: "Beta" }).check();
+  await page.getByRole("checkbox", { name: "readme.txt" }).check();
+  drive.state.delayMs = 1000;
+  await page.getByRole("button", { name: "Delete (2)" }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByRole("button", { name: "Delete (2)" })).toBeDisabled();
+  await expect(page.getByRole("list", { name: "Items" }).getByRole("listitem")).toHaveCount(1);
+  await expect(toast(page)).toBeHidden();
 });
 
 test("renames with validation and conflict handling", async ({ page }) => {

@@ -22,7 +22,7 @@ export async function fakeOneDrive(page: Page) {
   add("Beta", root.id, true);
   add("readme.txt", root.id, false);
 
-  const state = { failList: false, failUploadName: "" };
+  const state = { failList: false, failUploadName: "", delayMs: 0 };
   const children = (id: string) => [...nodes.values()].filter((n) => n.parent === id);
   const exists = (parent: string, name: string, except?: string) =>
     children(parent).some((n) => n.name.toLowerCase() === name.toLowerCase() && n.id !== except);
@@ -48,6 +48,7 @@ export async function fakeOneDrive(page: Page) {
     const url = new URL(req.url());
     const path = decodeURIComponent(url.pathname.replace("/v1.0", ""));
     const method = req.method();
+    if (state.delayMs) await new Promise((r) => setTimeout(r, state.delayMs));
     let m: RegExpMatchArray | null;
 
     if ((m = path.match(/^\/shares\/([^/]+)\/(driveItem|permission)$/))) {

@@ -14,6 +14,8 @@ let share: Share | null = load();
 let path: Crumb[] = [];
 let items: DriveItem[] = [];
 let selected: Set<string> | null = null; // null = not in select mode
+let status: "loading" | "failed" | "ready" = "loading";
+let busy = false; // a batch move/delete is running
 
 // Small DOM builder: names always go through textContent, never innerHTML.
 function h<K extends keyof HTMLElementTagNameMap>(
@@ -206,6 +208,8 @@ async function newFolder() {
 /** Runs op on each item; one failure does not stop the rest. */
 async function each(list: DriveItem[], op: (i: DriveItem) => Promise<unknown>) {
   const failed: string[] = [];
+  busy = true;
+  renderBrowser();
   for (const i of list) {
     try {
       await op(i);
@@ -214,6 +218,7 @@ async function each(list: DriveItem[], op: (i: DriveItem) => Promise<unknown>) {
     }
   }
   if (failed.length) toast(`Failed: ${failed.join("; ")}`);
+  busy = false;
   selected = null;
   await refresh();
 }
@@ -242,7 +247,9 @@ async function upload(files: File[]) {
 async function refresh() {
   try {
     items = sortItems(await graph.listChildren(share!.driveId, current().id));
+    status = "ready";
   } catch (e) {
+    status = "failed";
     toast(errorText(e));
   }
   renderBrowser();
@@ -252,6 +259,7 @@ async function open(crumbs: Crumb[]) {
   path = crumbs;
   selected = null;
   items = [];
+  status = "loading";
   renderBrowser();
   await refresh();
 }
@@ -288,7 +296,8 @@ function renderBrowser() {
     const more = edit && !sel ? h("button", { className: "more", "aria-label": `Actions for ${item.name}`, onclick: () => actionSheet(item) }, "⋯") : null;
     list.append(h("li", {}, lead, main, more));
   }
-  if (!items.length) list.append(h("li", { className: "empty" }, "This folder is empty"));
+  if (!items.length && status !== "failed")
+    list.append(h("li", { className: "empty" }, status === "loading" ? "Loading…" : "This folder is empty"));
 
   const filePicker = (label: string, folder: boolean) => {
     const input = h("input", { type: "file", multiple: true, hidden: true, onchange: () => upload([...(input.files ?? [])]) });
@@ -302,8 +311,8 @@ function renderBrowser() {
       ? h(
           "footer",
           {},
-          h("button", { disabled: !chosen.length, onclick: () => move(chosen) }, `Move (${chosen.length})`),
-          h("button", { className: "danger", disabled: !chosen.length, onclick: () => remove(chosen) }, `Delete (${chosen.length})`),
+          h("button", { disabled: busy || !chosen.length, onclick: () => move(chosen) }, `Move (${chosen.length})`),
+          h("button", { className: "danger", disabled: busy || !chosen.length, onclick: () => remove(chosen) }, `Delete (${chosen.length})`),
         )
       : h(
           "footer",
