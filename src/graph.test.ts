@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { createGraph, GraphError } from "./graph";
+import { createGraph, errorText, GraphError } from "./graph";
 
 const G = "https://graph.microsoft.com/v1.0";
 type Call = { url: string; init: RequestInit };
@@ -174,5 +174,15 @@ describe("request handling", () => {
   it("uses the Graph error message for other failures", async () => {
     const f = fakeFetch(graphError(500, "generalException"));
     await expect(createGraph(tokens(), f.fn).deleteItem("d", "i")).rejects.toThrow("generalException message");
+  });
+});
+
+describe("errorText", () => {
+  it("names the item on a name conflict", () => {
+    expect(errorText(new GraphError(409, "nameAlreadyExists", "x"), "a.txt")).toBe("'a.txt' already exists");
+  });
+  it("uses the message otherwise", () => {
+    expect(errorText(new GraphError(0, "network", "No connection"), "a")).toBe("No connection");
+    expect(errorText("boom")).toBe("boom");
   });
 });

@@ -140,3 +140,8 @@ export function createGraph(getToken: GetToken, fetchFn: typeof fetch = (...a) =
 }
 
 export type Graph = ReturnType<typeof createGraph>;
+
+export function errorText(e: unknown, name?: string): string {
+  if (e instanceof GraphError && e.code === "nameAlreadyExists" && name) return `'${name}' already exists`;
+  return e instanceof Error ? e.message : String(e);
+}
