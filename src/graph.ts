@@ -12,7 +12,8 @@ export type DriveItem = {
   lastModifiedDateTime?: string;
   webUrl?: string;
   folder?: { childCount?: number };
-  file?: object;
+  file?: { mimeType?: string };
+  thumbnails?: { small?: { url: string } }[];
   parentReference?: { driveId?: string; id?: string };
 };
 
@@ -87,13 +88,20 @@ export function createGraph(getToken: GetToken, fetchFn: typeof fetch = (...a) =
 
     async listChildren(driveId: string, id: string): Promise<DriveItem[]> {
       const items: DriveItem[] = [];
-      let next: string | undefined = `${item(driveId, id)}/children?$top=200`;
+      let next: string | undefined = `${item(driveId, id)}/children?$top=200&$expand=thumbnails`;
       while (next) {
         const page: { value: DriveItem[]; "@odata.nextLink"?: string } = await call(next);
         items.push(...page.value);
         next = page["@odata.nextLink"];
       }
       return items;
+    },
+
+    async getDownloadUrl(driveId: string, id: string): Promise<string> {
+      const r = await call<{ "@microsoft.graph.downloadUrl"?: string }>(`${item(driveId, id)}?$select=id,@microsoft.graph.downloadUrl`);
+      const url = r["@microsoft.graph.downloadUrl"];
+      if (!url) throw new GraphError(0, "noDownloadUrl", "This file can't be downloaded");
+      return url;
     },
 
     deleteItem: (driveId: string, id: string): Promise<void> => call(item(driveId, id), { method: "DELETE" }),

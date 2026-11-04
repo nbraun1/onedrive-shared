@@ -62,7 +62,7 @@ describe("listChildren", () => {
     );
     const items = await createGraph(tokens(), f.fn).listChildren("d1", "f1");
     expect(items.map((i) => i.id)).toEqual(["1", "2", "3"]);
-    expect(f.calls[0].url).toBe(`${G}/drives/d1/items/f1/children?$top=200`);
+    expect(f.calls[0].url).toBe(`${G}/drives/d1/items/f1/children?$top=200&$expand=thumbnails`);
     expect(f.calls[2].url).toBe(`${G}/next?p=3`);
   });
 });
@@ -184,5 +184,17 @@ describe("errorText", () => {
   it("uses the message otherwise", () => {
     expect(errorText(new GraphError(0, "network", "No connection"), "a")).toBe("No connection");
     expect(errorText("boom")).toBe("boom");
+  });
+});
+
+describe("getDownloadUrl", () => {
+  it("asks for the pre-authenticated download URL", async () => {
+    const f = fakeFetch(json({ id: "i", "@microsoft.graph.downloadUrl": "https://dl/x" }));
+    expect(await createGraph(tokens(), f.fn).getDownloadUrl("d", "i")).toBe("https://dl/x");
+    expect(f.calls[0].url).toBe(`${G}/drives/d/items/i?$select=id,@microsoft.graph.downloadUrl`);
+  });
+  it("fails clearly without one", async () => {
+    const f = fakeFetch(json({ id: "i" }));
+    await expect(createGraph(tokens(), f.fn).getDownloadUrl("d", "i")).rejects.toThrow("This file can't be downloaded");
   });
 });
