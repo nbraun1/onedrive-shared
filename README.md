@@ -42,7 +42,7 @@ Until this is set, the site shows "Not configured".
 
 ## The share link
 
-The app opens a folder through the link someone shared with you. On the **Links** screen, give the link a name (optional; the folder name is used otherwise) and paste it. The app saves it on this device and reopens the last used link on the next start. Use **☰ → Links** to switch, add, rename (`⋯` → Rename) or remove (`⋯` → Remove: only forgets the link, nothing in OneDrive changes). **☰ → Sign out** signs out of Microsoft on this device.
+The app opens a folder through the link someone shared with you. On the **Links** screen, give the link a name (optional; the folder name is used otherwise) and paste it. The app saves it on this device and reopens the last used link on the next start. Use **☰ → Links** to switch, add, rename (`⋯` → Rename) or remove (`⋯` → Remove: only forgets the link, nothing in OneDrive changes). Drag a link by its **≡** handle to change the order. **☰ → Sign out** signs out of Microsoft on this device.
 
 **How to get it**
 
@@ -64,7 +64,7 @@ https://onedrive.live.com/?redeem=aHR0cHM6Ly8xZHJ2Lm1zL2YvcyFBbUJjRGVGZ2g&id=...
 
 ## Viewing files
 
-Tap a file to open it full screen. Images (including iPhone HEIC photos), videos (MP4/MOV), audio and text files open in the app, as far as the browser can play them. Swipe left/right or use ‹ › to go through the folder. Anything else (PDF, Office, …) opens in OneDrive.
+Tap a file to open it full screen. Images (including iPhone HEIC photos), videos (MP4/MOV), audio and text files open in the app, as far as the browser can play them. Swipe left/right or use ‹ › to go through the folder. Anything else (PDF, Office, …) opens in OneDrive. If a file can't be shown, the viewer says why (for example the OneDrive error), with a button to open it in OneDrive.
 
 **Save** prepares the file and then shows **Save / Share**: tap it to open the iOS share sheet ("Save Image" / "Save Video"). Files larger than 200 MB open the download directly instead, to keep the app from running out of memory.
 

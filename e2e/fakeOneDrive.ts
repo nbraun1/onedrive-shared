@@ -3,6 +3,7 @@ import type { Page, Route } from "@playwright/test";
 export const EDIT_LINK = "https://1drv.ms/f/s!EditLink";
 export const VIEW_LINK = "https://1drv.ms/f/s!ViewLink";
 export const OTHER_LINK = "https://1drv.ms/f/s!OtherLink";
+export const THIRD_LINK = "https://1drv.ms/f/s!ThirdLink";
 // 1x1 PNG, and one second of silent 8 kHz mono WAV
 export const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
 const WAV = (() => {
@@ -68,10 +69,10 @@ export async function fakeOneDrive(page: Page) {
     let m: RegExpMatchArray | null;
 
     if ((m = path.match(/^\/shares\/([^/]+)\/(driveItem|permission)$/))) {
-      const link = m[1] === token(EDIT_LINK) ? "edit" : m[1] === token(VIEW_LINK) ? "view" : m[1] === token(OTHER_LINK) ? "other" : null;
+      const link = m[1] === token(EDIT_LINK) ? "edit" : m[1] === token(VIEW_LINK) ? "view" : m[1] === token(OTHER_LINK) ? "other" : m[1] === token(THIRD_LINK) ? "third" : null;
       if (!link) return json(route, { error: { code: "itemNotFound", message: "nope" } }, 404);
       if (m[2] === "permission") return json(route, { roles: [link === "view" ? "read" : "write"] });
-      return json(route, dto(link === "other" ? beta : root));
+      return json(route, dto(link === "other" ? beta : link === "third" ? alpha : root));
     }
     if ((m = path.match(/^\/drives\/D\/items\/([^/:]+)\/children$/))) {
       if (method === "GET") {

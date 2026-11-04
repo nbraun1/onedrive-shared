@@ -1,5 +1,5 @@
 import { devices, expect, test, type Page } from "@playwright/test";
-import { EDIT_LINK, OTHER_LINK, fakeOneDrive } from "./fakeOneDrive";
+import { EDIT_LINK, OTHER_LINK, THIRD_LINK, fakeOneDrive } from "./fakeOneDrive";
 
 async function boot(page: Page, init?: () => void) {
   await page.addInitScript(() => (window.__TEST_TOKEN__ = "test-token"));
@@ -274,5 +274,50 @@ test.describe("viewer error details", () => {
     await gallery(page);
     await page.getByRole("button", { name: "clip.mp4", exact: true }).click();
     await expect(viewer(page)).toContainText("Video could not be played");
+  });
+});
+
+test.describe("reorder links", () => {
+  async function threeLinks(page: Page) {
+    await boot(page);
+    for (const [link, name] of [[EDIT_LINK, "A"], [OTHER_LINK, "B"], [THIRD_LINK, "C"]]) {
+      await addLink(page, link, name);
+      await expect(crumbs(page)).toContainText(name);
+      await openLinks(page);
+    }
+  }
+  const order = (page: Page) => links(page).locator(".name").evaluateAll((els) => els.map((e) => e.firstChild!.textContent));
+  async function drag(page: Page, label: string, toY: (box: { y: number; height: number }) => number, target: string) {
+    const handle = (await page.getByRole("button", { name: `Reorder ${label}` }).boundingBox())!;
+    const dest = (await page.getByRole("button", { name: target, exact: true }).boundingBox())!;
+    await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(handle.x + handle.width / 2, toY(dest), { steps: 8 });
+    await page.mouse.up();
+  }
+
+  test("drags a link to the top and keeps the order", async ({ page }) => {
+    await threeLinks(page);
+    expect(await order(page)).toEqual(["A", "B", "C"]);
+    await drag(page, "C", (b) => b.y + 2, "A");
+    await expect.poll(() => order(page)).toEqual(["C", "A", "B"]);
+    await page.reload();
+    await openLinks(page);
+    expect(await order(page)).toEqual(["C", "A", "B"]);
+    await page.getByRole("button", { name: "B", exact: true }).click();
+    await expect(crumbs(page)).toContainText("B");
+  });
+
+  test("dropping in place keeps the order", async ({ page }) => {
+    await threeLinks(page);
+    await drag(page, "B", (b) => b.y + b.height / 2, "B");
+    await page.waitForTimeout(200);
+    expect(await order(page)).toEqual(["A", "B", "C"]);
+  });
+
+  test("drags a link down", async ({ page }) => {
+    await threeLinks(page);
+    await drag(page, "A", (b) => b.y + b.height - 2, "C");
+    await expect.poll(() => order(page)).toEqual(["B", "C", "A"]);
   });
 });

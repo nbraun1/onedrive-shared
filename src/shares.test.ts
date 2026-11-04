@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { addShare, loadShares, removeShare, renameShare, saveShares, validateLabel, type SavedShare } from "./shares";
+import { addShare, loadShares, moveShare, removeShare, renameShare, saveShares, validateLabel, type SavedShare } from "./shares";
 
 class MemStorage {
   data = new Map<string, string>();
@@ -109,5 +109,26 @@ describe("review fixes", () => {
     expect(list).toHaveLength(1);
     expect(typeof list[0].label).toBe("string");
     expect(store.getItem("share")).toBeNull();
+  });
+});
+
+describe("moveShare", () => {
+  const abc = ["A", "B", "C"].reduce<SavedShare[]>((l, n) => addShare(l, { ...folder, itemId: n }, n).list, []);
+  const labels = (l: SavedShare[]) => l.map((s) => s.label);
+  it.each([
+    [0, 2, ["B", "C", "A"]],
+    [2, 0, ["C", "A", "B"]],
+    [1, 2, ["A", "C", "B"]],
+    [1, 0, ["B", "A", "C"]],
+    [1, 1, ["A", "B", "C"]],
+    [-1, 0, ["A", "B", "C"]],
+    [0, 3, ["A", "B", "C"]],
+  ])("moves %i → %i", (from, to, expected) => {
+    expect(labels(moveShare(abc, from, to))).toEqual(expected);
+    expect(labels(abc)).toEqual(["A", "B", "C"]); // input untouched
+  });
+  it("keeps the order through save and load", () => {
+    saveShares(moveShare(abc, 2, 0), st());
+    expect(labels(loadShares(st()))).toEqual(["C", "A", "B"]);
   });
 });

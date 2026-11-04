@@ -55,3 +55,10 @@ export function removeShare(list: SavedShare[], id: string, storage: Storage = l
 }
 
 export const validateLabel = (label: string) => (label.trim().length > MAX_LABEL ? `Name is too long (max ${MAX_LABEL} characters)` : null);
+
+export function moveShare(list: SavedShare[], from: number, to: number): SavedShare[] {
+  if (from === to || from < 0 || to < 0 || from >= list.length || to >= list.length) return list;
+  const next = [...list];
+  next.splice(to, 0, ...next.splice(from, 1));
+  return next;
+}

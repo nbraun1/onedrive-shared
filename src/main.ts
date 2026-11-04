@@ -5,7 +5,7 @@ import { canMoveInto } from "./moveRules";
 import { validateName, validateShareLink } from "./shareLink";
 import { uploadMany } from "./upload";
 import { dialog, h } from "./dom";
-import { addShare, loadShares, removeShare, renameShare, saveShares, validateLabel, type SavedShare } from "./shares";
+import { addShare, loadShares, moveShare, removeShare, renameShare, saveShares, validateLabel, type SavedShare } from "./shares";
 import { openViewer, viewKind } from "./viewer";
 
 type Crumb = { id: string; name: string };
@@ -372,18 +372,51 @@ function renderBrowser() {
   );
 }
 
+/** Drag the handle up or down; on release the link moves to where its row's middle ended up. */
+function dragToReorder(handle: HTMLElement, row: HTMLElement, list: HTMLElement, index: number) {
+  handle.addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    handle.setPointerCapture(e.pointerId);
+    const mids = [...list.children].map((r) => {
+      const b = r.getBoundingClientRect();
+      return b.top + b.height / 2;
+    });
+    const startY = e.clientY;
+    let to = index;
+    row.classList.add("dragging");
+    const move = (ev: PointerEvent) => {
+      const dy = ev.clientY - startY;
+      row.style.transform = `translateY(${dy}px)`;
+      to = mids.filter((m, i) => i !== index && m < mids[index] + dy).length;
+    };
+    const end = (ev: PointerEvent) => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", end);
+      handle.removeEventListener("pointercancel", end);
+      if (ev.type === "pointerup") updateShares(moveShare(shares, index, to));
+      renderLinks();
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+  });
+}
+
 function renderLinks() {
   share = null;
   const list = h("ul", { className: "items", "aria-label": "Saved links" });
-  for (const s of shares)
-    list.append(
-      h(
-        "li",
-        {},
-        h("button", { className: "open", "aria-label": s.label, onclick: () => openShare(s) }, h("span", { className: "icon" }, "🔗"), h("span", { className: "name" }, s.label, h("small", {}, s.name))),
-        h("button", { className: "more", "aria-label": `Actions for ${s.label}`, onclick: () => linkActions(s) }, "⋯"),
-      ),
+  shares.forEach((s, index) => {
+    const handle = h("button", { className: "handle", "aria-label": `Reorder ${s.label}` }, "≡");
+    const row = h(
+      "li",
+      {},
+      handle,
+      h("button", { className: "open", "aria-label": s.label, onclick: () => openShare(s) }, h("span", { className: "icon" }, "🔗"), h("span", { className: "name" }, s.label, h("small", {}, s.name))),
+      h("button", { className: "more", "aria-label": `Actions for ${s.label}`, onclick: () => linkActions(s) }, "⋯"),
     );
+    dragToReorder(handle, row, list, index);
+    list.append(row);
+  });
   if (!shares.length) list.append(h("li", { className: "empty" }, "No saved links yet"));
 
   const label = h("input", { type: "text", "aria-label": "Link name", placeholder: "Name (optional)", autocomplete: "off" });
