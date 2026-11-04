@@ -5,13 +5,15 @@ import { canMoveInto } from "./moveRules";
 import { validateName, validateShareLink } from "./shareLink";
 import { uploadMany } from "./upload";
 import { dialog, h } from "./dom";
+import { addShare, loadShares, removeShare, renameShare, saveShares, validateLabel, type SavedShare } from "./shares";
+import { openViewer, viewKind } from "./viewer";
 
-type Share = { driveId: string; itemId: string; name: string; canEdit: boolean };
 type Crumb = { id: string; name: string };
 
 const app = document.getElementById("app")!;
 const graph = createGraph(getToken);
-let share: Share | null = load();
+let shares = loadShares();
+let share: SavedShare | null = null; // the link being browsed
 let path: Crumb[] = [];
 let items: DriveItem[] = [];
 let selected: Set<string> | null = null; // null = not in select mode
@@ -20,14 +22,6 @@ let busy = false; // a batch move/delete is running
 
 // Kept across re-renders so upload failures stay visible after the list refreshes.
 const uploads = h("section", { className: "uploads", "aria-label": "Uploads", role: "region" });
-
-function load(): Share | null {
-  try {
-    return JSON.parse(localStorage.getItem("share") ?? "null");
-  } catch {
-    return null;
-  }
-}
 
 let toastTimer: number | undefined;
 function toast(message: string) {
@@ -58,7 +52,7 @@ function canUploadFolder() {
 
 /* ---------- dialogs ---------- */
 
-function askName(title: string, initial = ""): Promise<string | null> {
+function askName(title: string, initial = "", validate: (name: string) => string | null = validateName): Promise<string | null> {
   return new Promise((resolve) => {
     const input = h("input", { type: "text", value: initial, "aria-label": "Name", autocomplete: "off" });
     const error = h("p", { className: "error", role: "alert" });
@@ -74,7 +68,7 @@ function askName(title: string, initial = ""): Promise<string | null> {
     let result: string | null = null;
     form.querySelector<HTMLButtonElement>("[value=cancel]")!.onclick = () => d.close();
     form.onsubmit = (e) => {
-      const problem = validateName(input.value);
+      const problem = validate(input.value);
       if (problem) {
         e.preventDefault();
         error.textContent = problem;
@@ -88,7 +82,7 @@ function askName(title: string, initial = ""): Promise<string | null> {
   });
 }
 
-function confirmDelete(text: string): Promise<boolean> {
+function confirmDelete(text: string, action = "Delete"): Promise<boolean> {
   return new Promise((resolve) => {
     let ok = false;
     const d = dialog(
@@ -97,7 +91,7 @@ function confirmDelete(text: string): Promise<boolean> {
         "div",
         { className: "buttons" },
         h("button", { onclick: () => d.close() }, "Cancel"),
-        h("button", { className: "danger", onclick: () => ((ok = true), d.close()) }, "Delete"),
+        h("button", { className: "danger", onclick: () => ((ok = true), d.close()) }, action),
       ),
     );
     d.addEventListener("close", () => resolve(ok));
@@ -237,18 +231,51 @@ async function refresh() {
   renderBrowser();
 }
 
-function forgetShare() {
-  localStorage.removeItem("share");
-  share = null;
-}
-
 function menu() {
   const d = dialog(
     h(
       "div",
       { className: "sheet" },
-      h("button", { onclick: () => (d.close(), forgetShare(), renderLink()) }, "Change link"),
-      h("button", { onclick: async () => (d.close(), forgetShare(), await signOut(), renderLink()) }, "Sign out"),
+      h("button", { onclick: () => (d.close(), renderLinks()) }, "Links"),
+      h("button", { onclick: async () => (d.close(), await signOut(), renderLinks()) }, "Sign out"),
+      h("button", { onclick: () => d.close() }, "Cancel"),
+    ),
+  );
+}
+
+function openShare(s: SavedShare) {
+  share = s;
+  localStorage.setItem("lastShare", s.id);
+  return open([{ id: s.itemId, name: s.label }]);
+}
+
+function updateShares(list: SavedShare[]) {
+  shares = list;
+  saveShares(shares);
+}
+
+function linkActions(s: SavedShare) {
+  const d = dialog(
+    h("h2", {}, s.label),
+    h(
+      "div",
+      { className: "sheet" },
+      h("button", {
+        onclick: async () => {
+          d.close();
+          const label = await askName("Rename link", s.label, (v) => (v.trim() ? validateLabel(v) : "Name must not be empty"));
+          if (label) updateShares(renameShare(shares, s.id, label));
+          renderLinks();
+        },
+      }, "Rename"),
+      h("button", {
+        className: "danger",
+        onclick: async () => {
+          d.close();
+          if (await confirmDelete(`Remove '${s.label}'? Files in OneDrive are not affected.`, "Remove")) updateShares(removeShare(shares, s.id));
+          renderLinks();
+        },
+      }, "Remove"),
       h("button", { onclick: () => d.close() }, "Cancel"),
     ),
   );
@@ -263,6 +290,12 @@ async function open(crumbs: Crumb[]) {
   await refresh();
 }
 
+function view(item: DriveItem) {
+  const viewable = items.filter((i) => viewKind(i));
+  if (viewKind(item)) openViewer(graph, share!.driveId, viewable, viewable.indexOf(item));
+  else window.open(item.webUrl, "_blank", "noopener");
+}
+
 function renderBrowser() {
   const edit = share!.canEdit;
   const crumbs = h(
@@ -273,14 +306,17 @@ function renderBrowser() {
   const list = h("ul", { className: "items", "aria-label": "Items" });
   for (const item of items) {
     const meta = `${isFolder(item) ? `${item.folder!.childCount ?? 0} items` : formatSize(item.size)} · ${new Date(item.lastModifiedDateTime ?? "").toLocaleDateString()}`;
+    const icon = h("span", { className: "icon" }, isFolder(item) ? "📁" : "📄");
+    const thumb = item.thumbnails?.[0]?.small?.url;
+    if (thumb) icon.replaceChildren(h("img", { src: thumb, alt: "", loading: "lazy", onerror: () => icon.replaceChildren("📄") }));
     const main = h(
       "button",
       {
         className: "open",
         "aria-label": item.name,
-        onclick: () => (isFolder(item) ? open([...path, { id: item.id, name: item.name }]) : window.open(item.webUrl, "_blank", "noopener")),
+        onclick: () => (isFolder(item) ? open([...path, { id: item.id, name: item.name }]) : view(item)),
       },
-      h("span", { className: "icon" }, isFolder(item) ? "📁" : "📄"),
+      icon,
       h("span", { className: "name" }, item.name, h("small", {}, meta)),
     );
     const sel = selected;
@@ -336,35 +372,54 @@ function renderBrowser() {
   );
 }
 
-function renderLink() {
+function renderLinks() {
+  share = null;
+  const list = h("ul", { className: "items", "aria-label": "Saved links" });
+  for (const s of shares)
+    list.append(
+      h(
+        "li",
+        {},
+        h("button", { className: "open", "aria-label": s.label, onclick: () => openShare(s) }, h("span", { className: "icon" }, "🔗"), h("span", { className: "name" }, s.label, h("small", {}, s.name))),
+        h("button", { className: "more", "aria-label": `Actions for ${s.label}`, onclick: () => linkActions(s) }, "⋯"),
+      ),
+    );
+  if (!shares.length) list.append(h("li", { className: "empty" }, "No saved links yet"));
+
+  const label = h("input", { type: "text", "aria-label": "Link name", placeholder: "Name (optional)", autocomplete: "off" });
   const input = h("input", { type: "url", "aria-label": "Share link", placeholder: "https://1drv.ms/f/…", autocomplete: "off" });
   const error = h("p", { className: "error", role: "alert" });
-  const button = h("button", { type: "submit", className: "primary" }, "Open");
+  const button = h("button", { type: "submit", className: "primary" }, "Add");
   const form = h(
     "form",
-    { className: "center" },
-    h("h1", {}, "Shared Drive"),
-    h("p", {}, "Paste the OneDrive link your friend shared with you (a folder link containing /f/)."),
+    { className: "add-link" },
+    h("p", {}, "Add a OneDrive folder link someone shared with you (it contains /f/)."),
+    label,
     input,
     error,
     button,
   );
   form.onsubmit = async (e) => {
     e.preventDefault();
-    error.textContent = validateShareLink(input.value) ?? "";
+    error.textContent = validateLabel(label.value) ?? validateShareLink(input.value) ?? "";
     if (error.textContent) return;
     button.disabled = true;
     try {
       const { item, canEdit } = await graph.resolveShare(input.value);
-      share = { driveId: item.parentReference!.driveId!, itemId: item.id, name: item.name, canEdit };
-      localStorage.setItem("share", JSON.stringify(share));
-      await open([{ id: item.id, name: item.name }]);
+      const added = addShare(shares, { driveId: item.parentReference!.driveId!, itemId: item.id, name: item.name, canEdit }, label.value);
+      updateShares(added.list);
+      await openShare(added.share);
+      if (added.existed) toast(`Already saved as '${added.share.label}'`);
     } catch (err) {
       error.textContent = errorText(err);
       button.disabled = false;
     }
   };
-  app.replaceChildren(form);
+  app.replaceChildren(
+    h("header", {}, h("h1", {}, "Links"), h("button", { onclick: async () => (await signOut(), renderLinks()) }, "Sign out")),
+    list,
+    form,
+  );
 }
 
 async function main() {
@@ -384,8 +439,9 @@ async function main() {
     app.replaceChildren(h("p", { className: "center error" }, `Sign-in failed: ${errorText(e)}`));
     return;
   }
-  if (share) await open([{ id: share.itemId, name: share.name }]);
-  else renderLink();
+  const last = shares.find((s) => s.id === localStorage.getItem("lastShare"));
+  if (last) await openShare(last);
+  else renderLinks();
 }
 
 document.body.append(h("div", { id: "toast", role: "status", hidden: true }));

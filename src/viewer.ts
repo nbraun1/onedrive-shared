@@ -1,4 +1,5 @@
-import type { DriveItem } from "./graph";
+import { dialog, h } from "./dom";
+import type { DriveItem, Graph } from "./graph";
 
 export type ViewKind = "image" | "video" | "audio" | "text";
 
@@ -21,4 +22,177 @@ export function viewKind(item: DriveItem): ViewKind | null {
   const top = mime.split("/")[0];
   if (top === "image" || top === "video" || top === "audio") return top;
   return mime === "text/plain" ? "text" : null;
+}
+
+const TEXT_LIMIT = 1024 * 1024;
+const BLOB_LIMIT = 200 * 1024 * 1024; // larger files would exhaust an iPhone's memory as a blob
+
+/** Full-screen viewer over the viewable files of a folder, starting at files[start]. */
+export function openViewer(graph: Graph, driveId: string, files: DriveItem[], start: number) {
+  let index = start;
+  let seq = 0; // increments per shown file; stale async results compare against it
+  let url: string | null = null;
+  let blob: Blob | null = null;
+
+  const title = h("span", { className: "title" });
+  const counter = h("span", { className: "counter" });
+  const save = h("button", { onclick: () => onSave() }, "Save");
+  const openInOneDrive = () => window.open(files[index].webUrl, "_blank", "noopener");
+  const stage = h("div", { className: "stage" });
+  const prev = h("button", { className: "nav prev", "aria-label": "Previous", onclick: () => go(index - 1) }, "‹");
+  const next = h("button", { className: "nav next", "aria-label": "Next", onclick: () => go(index + 1) }, "›");
+  const d = dialog(
+    h("div", { className: "bar" }, title, counter, save, h("button", { onclick: openInOneDrive }, "Open in OneDrive"), h("button", { onclick: () => d.close() }, "Close")),
+    stage,
+    prev,
+    next,
+  );
+  d.className = "viewer";
+  d.setAttribute("aria-label", "Viewer");
+  d.addEventListener("close", clearStage);
+  d.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowLeft") go(index - 1);
+    if (e.key === "ArrowRight") go(index + 1);
+  });
+
+  let swipe: { x: number; y: number } | null = null;
+  stage.addEventListener("pointerdown", (e) => {
+    const t = e.target;
+    if (t instanceof HTMLMediaElement) {
+      const r = t.getBoundingClientRect();
+      if (e.clientY > r.top + r.height * 0.75) return; // the controls live at the bottom
+    }
+    swipe = { x: e.clientX, y: e.clientY };
+  });
+  stage.addEventListener("pointerup", (e) => {
+    if (!swipe) return;
+    const dx = e.clientX - swipe.x;
+    const dy = e.clientY - swipe.y;
+    swipe = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) go(index + (dx < 0 ? 1 : -1));
+  });
+  stage.addEventListener("pointercancel", () => (swipe = null));
+
+  function go(i: number) {
+    if (i < 0 || i >= files.length || i === index) return;
+    index = i;
+    show();
+  }
+
+  function clearStage() {
+    stage.querySelectorAll("video, audio").forEach((m) => {
+      const media = m as HTMLMediaElement;
+      media.pause();
+      media.removeAttribute("src");
+      media.load();
+    });
+    stage.replaceChildren();
+  }
+
+  function fail(my: number) {
+    if (my !== seq) return;
+    clearStage();
+    stage.append(h("div", { className: "hint" }, h("p", {}, "Can't show this file here"), h("button", { onclick: openInOneDrive }, "Open in OneDrive")));
+  }
+
+  async function show() {
+    const my = ++seq;
+    const item = files[index];
+    url = null;
+    blob = null;
+    save.textContent = "Save";
+    save.disabled = false;
+    title.textContent = item.name;
+    counter.textContent = `${index + 1} / ${files.length}`;
+    prev.disabled = index === 0;
+    next.disabled = index === files.length - 1;
+    clearStage();
+    stage.append(h("p", { className: "hint" }, "Loading…"));
+    let src: string;
+    try {
+      src = await graph.getDownloadUrl(driveId, item.id); // fresh each time: these URLs expire
+    } catch {
+      return fail(my);
+    }
+    if (my !== seq) return;
+    url = src;
+    const kind = viewKind(item);
+    let el: HTMLElement;
+    if (kind === "image") el = h("img", { src, alt: item.name, draggable: false, onerror: () => fail(my) });
+    else if (kind === "video" || kind === "audio")
+      el = h(kind, { src, controls: true, playsInline: true, preload: "metadata", onerror: () => fail(my) });
+    else {
+      let text: string;
+      try {
+        text = await fetchStart(src);
+      } catch {
+        return fail(my);
+      }
+      if (my !== seq) return;
+      const cut = text.length >= TEXT_LIMIT || (item.size ?? 0) > TEXT_LIMIT;
+      el = h("div", { className: "text" }, h("pre", {}, text.slice(0, TEXT_LIMIT)), cut && h("p", { className: "hint" }, "Only the first 1 MB is shown."));
+    }
+    stage.replaceChildren(el);
+  }
+
+  async function fetchStart(src: string): Promise<string> {
+    let res: Response;
+    try {
+      res = await fetch(src, { headers: { Range: `bytes=0-${TEXT_LIMIT - 1}` } });
+    } catch {
+      res = await fetch(src); // in case the host rejects the Range header's CORS preflight
+    }
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.text();
+  }
+
+  async function onSave() {
+    const item = files[index];
+    if (blob) return shareBlob(blob, item.name);
+    if (!url || (item.size ?? 0) > BLOB_LIMIT) {
+      window.open(url ?? item.webUrl, "_blank", "noopener");
+      return;
+    }
+    const my = seq;
+    save.disabled = true;
+    try {
+      const res = await fetch(url);
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      const total = Number(res.headers.get("Content-Length")) || item.size || 0;
+      const chunks: Uint8Array[] = [];
+      let got = 0;
+      for (const reader = res.body.getReader(); ; ) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (my !== seq) return;
+        chunks.push(value);
+        got += value.length;
+        if (total) save.textContent = `Preparing… ${Math.round((got / total) * 100)}%`;
+      }
+      if (my !== seq) return;
+      blob = new Blob(chunks as BlobPart[], { type: res.headers.get("Content-Type") ?? "" });
+      save.textContent = "Save / Share"; // iOS only allows share() directly inside a tap, hence the second tap
+    } catch {
+      if (my === seq) save.textContent = "Save failed, retry";
+    } finally {
+      if (my === seq) save.disabled = false;
+    }
+  }
+
+  async function shareBlob(b: Blob, name: string) {
+    const file = new File([b], name, { type: b.type });
+    if (navigator.canShare?.({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file] });
+      } catch (e) {
+        if ((e as Error).name !== "AbortError") save.textContent = "Save failed, retry";
+      }
+      return;
+    }
+    const a = h("a", { href: URL.createObjectURL(b), download: name });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
+  }
+
+  show();
 }

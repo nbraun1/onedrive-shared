@@ -2,6 +2,16 @@ import type { Page, Route } from "@playwright/test";
 
 export const EDIT_LINK = "https://1drv.ms/f/s!EditLink";
 export const VIEW_LINK = "https://1drv.ms/f/s!ViewLink";
+export const OTHER_LINK = "https://1drv.ms/f/s!OtherLink";
+// 1x1 PNG, and one second of silent 8 kHz mono WAV
+export const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==", "base64");
+const WAV = (() => {
+  const n = 8000, b = Buffer.alloc(44 + n);
+  b.write("RIFF", 0); b.writeUInt32LE(36 + n, 4); b.write("WAVEfmt ", 8); b.writeUInt32LE(16, 16); b.writeUInt16LE(1, 20); b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(8000, 24); b.writeUInt32LE(8000, 28); b.writeUInt16LE(1, 32); b.writeUInt16LE(8, 34); b.write("data", 36); b.writeUInt32LE(n, 40); b.fill(128, 44);
+  return b;
+})();
+const MIME: Record<string, string> = { jpg: "image/jpeg", png: "image/png", mp4: "video/mp4", txt: "text/plain", pdf: "application/pdf", wav: "audio/wav" };
 const token = (link: string) => "u!" + Buffer.from(link).toString("base64url");
 
 type Node = { id: string; name: string; parent?: string; folder: boolean; size?: number };
@@ -21,8 +31,12 @@ export async function fakeOneDrive(page: Page) {
   add("a.txt", alpha.id, false);
   add("Beta", root.id, true);
   add("readme.txt", root.id, false);
+  const gallery = add("Gallery", alpha.id, true);
+  for (const f of ["clip.mp4", "doc.pdf", "notes.txt", "photo1.jpg", "photo2.png", "song.wav"]) add(f, gallery.id, false);
+  [...nodes.values()].find((n) => n.name === "clip.mp4")!.size = 300 * 1024 * 1024;
+  const beta = [...nodes.values()].find((n) => n.name === "Beta")!;
 
-  const state = { failList: false, failUploadName: "", delayMs: 0, slowFolder: "" };
+  const state = { failList: false, failUploadName: "", delayMs: 0, slowFolder: "", dlDelayMs: 0, failDownloadUrl: false, dlCalls: 0, dlRequests: [] as { url: string; range?: string }[] };
   const children = (id: string) => [...nodes.values()].filter((n) => n.parent === id);
   const exists = (parent: string, name: string, except?: string) =>
     children(parent).some((n) => n.name.toLowerCase() === name.toLowerCase() && n.id !== except);
@@ -36,7 +50,9 @@ export async function fakeOneDrive(page: Page) {
     lastModifiedDateTime: "2026-11-01T10:00:00Z",
     webUrl: `https://onedrive.example/${n.id}`,
     parentReference: { driveId: "D", id: n.parent },
-    ...(n.folder ? { folder: { childCount: children(n.id).length } } : { file: {} }),
+    ...(n.folder
+      ? { folder: { childCount: children(n.id).length } }
+      : { file: { mimeType: MIME[n.name.split(".").pop()!] ?? "application/octet-stream" }, thumbnails: n.name === "readme.txt" ? [] : [{ small: { url: `https://thumb.example/${n.id}` } }] }),
   });
   const remove = (id: string) => {
     children(id).forEach((c) => remove(c.id));
@@ -52,9 +68,10 @@ export async function fakeOneDrive(page: Page) {
     let m: RegExpMatchArray | null;
 
     if ((m = path.match(/^\/shares\/([^/]+)\/(driveItem|permission)$/))) {
-      const link = m[1] === token(EDIT_LINK) ? "edit" : m[1] === token(VIEW_LINK) ? "view" : null;
+      const link = m[1] === token(EDIT_LINK) ? "edit" : m[1] === token(VIEW_LINK) ? "view" : m[1] === token(OTHER_LINK) ? "other" : null;
       if (!link) return json(route, { error: { code: "itemNotFound", message: "nope" } }, 404);
-      return m[2] === "driveItem" ? json(route, dto(root)) : json(route, { roles: [link === "edit" ? "write" : "read"] });
+      if (m[2] === "permission") return json(route, { roles: [link === "view" ? "read" : "write"] });
+      return json(route, dto(link === "other" ? beta : root));
     }
     if ((m = path.match(/^\/drives\/D\/items\/([^/:]+)\/children$/))) {
       if (method === "GET") {
@@ -72,6 +89,11 @@ export async function fakeOneDrive(page: Page) {
     }
     if ((m = path.match(/^\/drives\/D\/items\/([^/:]+)$/))) {
       const n = nodes.get(m[1])!;
+      if (method === "GET") {
+        if (state.dlDelayMs) await new Promise((r) => setTimeout(r, state.dlDelayMs));
+        if (state.failDownloadUrl) return json(route, { error: { code: "generalException", message: "boom" } }, 500);
+        return json(route, { id: n.id, "@microsoft.graph.downloadUrl": `https://dl.example/${n.id}/${encodeURIComponent(n.name)}?v=${++state.dlCalls}` });
+      }
       if (method === "DELETE") {
         remove(n.id);
         return route.fulfill({ status: 204 });
@@ -88,6 +110,17 @@ export async function fakeOneDrive(page: Page) {
       return json(route, dto(n));
     }
     return route.fulfill({ status: 500, body: `unexpected ${method} ${path}` });
+  });
+  await page.route("https://thumb.example/**", (route) => route.fulfill({ contentType: "image/png", body: PNG }));
+  await page.route("https://dl.example/**", (route) => {
+    const req = route.request();
+    state.dlRequests.push({ url: req.url(), range: req.headers()["range"] });
+    const name = decodeURIComponent(new URL(req.url()).pathname.split("/").pop()!);
+    const headers = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*" };
+    if (name.endsWith(".txt")) return route.fulfill({ headers, contentType: "text/plain", body: "Hello from notes" });
+    if (name.endsWith(".wav")) return route.fulfill({ headers, contentType: "audio/wav", body: WAV });
+    if (name.endsWith(".mp4")) return route.fulfill({ headers, contentType: "video/mp4", body: Buffer.from("not a video") });
+    return route.fulfill({ headers, contentType: "image/png", body: PNG });
   });
   return { nodes, state, names: (parentName: string) => children([...nodes.values()].find((n) => n.name === parentName)!.id).map((n) => n.name).sort() };
 }

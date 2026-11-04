@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { devices, expect, test, type Page } from "@playwright/test";
-import { EDIT_LINK, VIEW_LINK, fakeOneDrive } from "./fakeOneDrive";
+import { EDIT_LINK, OTHER_LINK, VIEW_LINK, fakeOneDrive } from "./fakeOneDrive";
 
 async function start(page: Page, link = EDIT_LINK, init?: () => void) {
   await page.addInitScript(() => (window.__TEST_TOKEN__ = "test-token"));
@@ -8,7 +8,7 @@ async function start(page: Page, link = EDIT_LINK, init?: () => void) {
   const drive = await fakeOneDrive(page);
   await page.goto("./");
   await page.getByLabel("Share link").fill(link);
-  await page.getByRole("button", { name: "Open" }).click();
+  await page.getByRole("button", { name: "Add" }).click();
   await expect(page.getByRole("navigation", { name: "Path" })).toContainText("Friend's folder");
   return drive;
 }
@@ -36,18 +36,18 @@ test.describe("share link", () => {
   ]) {
     test(`rejects ${link}`, async ({ page }) => {
       await page.getByLabel("Share link").fill(link);
-      await page.getByRole("button", { name: "Open" }).click();
+      await page.getByRole("button", { name: "Add" }).click();
       await expect(page.getByRole("alert")).toHaveText(message);
     });
   }
   test("is remembered across reloads and can be changed", async ({ page }) => {
     await page.getByLabel("Share link").fill(EDIT_LINK);
-    await page.getByRole("button", { name: "Open" }).click();
+    await page.getByRole("button", { name: "Add" }).click();
     await expect(page.getByRole("button", { name: "readme.txt", exact: true })).toBeVisible();
     await page.reload();
     await expect(page.getByRole("button", { name: "readme.txt", exact: true })).toBeVisible();
     await page.getByRole("button", { name: "Menu" }).click();
-    await page.getByRole("dialog").getByRole("button", { name: "Change link" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Links" }).click();
     await expect(page.getByLabel("Share link")).toBeVisible();
   });
 });
@@ -228,9 +228,9 @@ test("a slow folder load does not replace the folder you went back to", async ({
   await expect(page.getByRole("button", { name: "Inner", exact: true })).toHaveCount(0);
 });
 
-test("signs out and forgets the link", async ({ page }) => {
+test("signs out to the Links screen", async ({ page }) => {
   await start(page);
   await page.getByRole("button", { name: "Menu" }).click();
   await page.getByRole("dialog").getByRole("button", { name: "Sign out" }).click();
-  expect(await page.evaluate(() => localStorage.getItem("share"))).toBeNull();
+  await expect(page.getByRole("heading", { name: "Links" })).toBeVisible();
 });
