@@ -94,3 +94,20 @@ describe("validateLabel", () => {
     expect(validateLabel("x".repeat(61))).toBe("Name is too long (max 60 characters)");
   });
 });
+
+describe("review fixes", () => {
+  it("re-adding a link refreshes edit access and folder name", () => {
+    const first = addShare([], { ...folder, canEdit: false }, "Urlaub");
+    const again = addShare(first.list, { ...folder, name: "Renamed", canEdit: true }, "");
+    expect(again.existed).toBe(true);
+    expect(again.share).toMatchObject({ label: "Urlaub", canEdit: true, name: "Renamed" });
+    expect(again.list[0]).toEqual(again.share);
+  });
+  it("survives a v1 link without a name", () => {
+    store.setItem("share", JSON.stringify({ driveId: "a", itemId: "b", name: 42 }));
+    const list = loadShares(st());
+    expect(list).toHaveLength(1);
+    expect(typeof list[0].label).toBe("string");
+    expect(store.getItem("share")).toBeNull();
+  });
+});

@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { viewKind } from "./viewer";
+import { readStart, viewKind } from "./viewer";
 
 it.each([
   [{ name: "IMG_0001.HEIC", file: {} }, "image"],
@@ -13,4 +13,28 @@ it.each([
   [{ name: "README", file: {} }, null],
 ])("%j → %s", (item, kind) => {
   expect(viewKind({ id: "1", ...item })).toBe(kind);
+});
+
+it("reads only the start of a large text body and stops the download", async () => {
+  const chunk = new Uint8Array(512 * 1024).fill(65);
+  let pulled = 0;
+  let cancelled = false;
+  const body = new ReadableStream<Uint8Array>({
+    pull(c) {
+      pulled++;
+      c.enqueue(chunk);
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const { text, cut } = await readStart(new Response(body), 1024 * 1024);
+  expect(text.length).toBe(1024 * 1024);
+  expect(cut).toBe(true);
+  expect(cancelled).toBe(true);
+  expect(pulled).toBeLessThanOrEqual(4);
+});
+
+it("reads a small text body completely", async () => {
+  expect(await readStart(new Response("hi ü"), 1024)).toEqual({ text: "hi ü", cut: false });
 });

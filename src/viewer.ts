@@ -27,11 +27,38 @@ export function viewKind(item: DriveItem): ViewKind | null {
 const TEXT_LIMIT = 1024 * 1024;
 const BLOB_LIMIT = 200 * 1024 * 1024; // larger files would exhaust an iPhone's memory as a blob
 
+/** Reads at most `limit` bytes of a text body and cancels the rest of the download. */
+export async function readStart(res: Response, limit: number): Promise<{ text: string; cut: boolean }> {
+  if (!res.body) return { text: "", cut: false };
+  const reader = res.body.getReader();
+  const parts: Uint8Array[] = [];
+  let got = 0;
+  let cut = false;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value);
+    got += value.length;
+    if (got >= limit) {
+      cut = true;
+      await reader.cancel();
+      break;
+    }
+  }
+  const bytes = new Uint8Array(Math.min(got, limit));
+  let at = 0;
+  for (const p of parts) {
+    const take = p.subarray(0, bytes.length - at);
+    bytes.set(take, at);
+    at += take.length;
+  }
+  return { text: new TextDecoder().decode(bytes), cut };
+}
+
 /** Full-screen viewer over the viewable files of a folder, starting at files[start]. */
 export function openViewer(graph: Graph, driveId: string, files: DriveItem[], start: number) {
   let index = start;
   let seq = 0; // increments per shown file; stale async results compare against it
-  let url: string | null = null;
   let blob: Blob | null = null;
 
   const title = h("span", { className: "title" });
@@ -57,6 +84,10 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
 
   let swipe: { x: number; y: number } | null = null;
   stage.addEventListener("pointerdown", (e) => {
+    if (!e.isPrimary) {
+      swipe = null; // a second finger means pinch-zoom, not a swipe
+      return;
+    }
     const t = e.target;
     if (t instanceof HTMLMediaElement) {
       const r = t.getBoundingClientRect();
@@ -65,7 +96,7 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     swipe = { x: e.clientX, y: e.clientY };
   });
   stage.addEventListener("pointerup", (e) => {
-    if (!swipe) return;
+    if (!swipe || !e.isPrimary) return;
     const dx = e.clientX - swipe.x;
     const dy = e.clientY - swipe.y;
     swipe = null;
@@ -98,10 +129,9 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
   async function show() {
     const my = ++seq;
     const item = files[index];
-    url = null;
     blob = null;
     save.textContent = "Save";
-    save.disabled = false;
+    save.disabled = true; // until the file has loaded
     title.textContent = item.name;
     counter.textContent = `${index + 1} / ${files.length}`;
     prev.disabled = index === 0;
@@ -115,27 +145,27 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
       return fail(my);
     }
     if (my !== seq) return;
-    url = src;
+    save.disabled = false;
     const kind = viewKind(item);
     let el: HTMLElement;
     if (kind === "image") el = h("img", { src, alt: item.name, draggable: false, onerror: () => fail(my) });
     else if (kind === "video" || kind === "audio")
       el = h(kind, { src, controls: true, playsInline: true, preload: "metadata", onerror: () => fail(my) });
     else {
-      let text: string;
+      let start: { text: string; cut: boolean };
       try {
-        text = await fetchStart(src);
+        start = await readStart(await fetchStart(src), TEXT_LIMIT);
       } catch {
         return fail(my);
       }
       if (my !== seq) return;
-      const cut = text.length >= TEXT_LIMIT || (item.size ?? 0) > TEXT_LIMIT;
-      el = h("div", { className: "text" }, h("pre", {}, text.slice(0, TEXT_LIMIT)), cut && h("p", { className: "hint" }, "Only the first 1 MB is shown."));
+      const cut = start.cut || (item.size ?? 0) > TEXT_LIMIT;
+      el = h("div", { className: "text" }, h("pre", {}, start.text), cut && h("p", { className: "hint" }, "Only the first 1 MB is shown."));
     }
     stage.replaceChildren(el);
   }
 
-  async function fetchStart(src: string): Promise<string> {
+  async function fetchStart(src: string): Promise<Response> {
     let res: Response;
     try {
       res = await fetch(src, { headers: { Range: `bytes=0-${TEXT_LIMIT - 1}` } });
@@ -143,20 +173,30 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
       res = await fetch(src); // in case the host rejects the Range header's CORS preflight
     }
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return res.text();
+    return res;
   }
 
   async function onSave() {
     const item = files[index];
     if (blob) return shareBlob(blob, item.name);
-    if (!url || (item.size ?? 0) > BLOB_LIMIT) {
-      window.open(url ?? item.webUrl, "_blank", "noopener");
+    const my = seq;
+    if ((item.size ?? 0) > BLOB_LIMIT) {
+      // Open the window inside the tap (popup blockers), then point it at a fresh URL.
+      const w = window.open("", "_blank");
+      try {
+        const fresh = await graph.getDownloadUrl(driveId, item.id);
+        if (w) w.location.href = fresh;
+        else window.location.href = fresh;
+      } catch {
+        w?.close();
+        save.textContent = "Save failed, retry";
+      }
       return;
     }
-    const my = seq;
     save.disabled = true;
     try {
-      const res = await fetch(url);
+      // The URL from when the file was shown may have expired if the app sat open for a while.
+      const res = await fetch(await graph.getDownloadUrl(driveId, item.id));
       if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
       const total = Number(res.headers.get("Content-Length")) || item.size || 0;
       const chunks: Uint8Array[] = [];

@@ -227,3 +227,32 @@ test.describe("viewer on a desktop browser", () => {
     expect((await download).suggestedFilename()).toBe("photo1.jpg");
   });
 });
+
+test.describe("viewer review fixes", () => {
+  test("Save waits for the file and uses a fresh download URL", async ({ page }) => {
+    const drive = await gallery(page);
+    drive.state.dlDelayMs = 800;
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(viewer(page).getByRole("button", { name: "Save" })).toBeDisabled();
+    await expect(viewer(page).locator("img")).toBeVisible();
+    drive.state.dlDelayMs = 0;
+    const shown = drive.state.dlCalls;
+    await viewer(page).getByRole("button", { name: "Save" }).click();
+    await expect(viewer(page).getByRole("button", { name: "Save / Share" })).toBeVisible();
+    expect(drive.state.dlRequests.at(-1)!.url).toContain(`?v=${shown + 1}`);
+  });
+
+  test("a second finger does not count as a swipe", async ({ page }) => {
+    await gallery(page);
+    await page.getByRole("button", { name: "photo2.png", exact: true }).click();
+    await expect(viewer(page)).toContainText("4 / 5");
+    await viewer(page).locator(".stage").evaluate((stage) => {
+      const r = stage.getBoundingClientRect();
+      const y = r.top + r.height / 2;
+      stage.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: false, clientX: r.left + 200, clientY: y }));
+      stage.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, isPrimary: false, clientX: r.left + 20, clientY: y }));
+    });
+    await page.waitForTimeout(300);
+    await expect(viewer(page)).toContainText("4 / 5");
+  });
+});
