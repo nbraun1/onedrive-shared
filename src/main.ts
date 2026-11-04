@@ -4,6 +4,7 @@ import { createGraph, errorText, type DriveItem } from "./graph";
 import { canMoveInto } from "./moveRules";
 import { validateName, validateShareLink } from "./shareLink";
 import { uploadMany } from "./upload";
+import { dialog, h } from "./dom";
 
 type Share = { driveId: string; itemId: string; name: string; canEdit: boolean };
 type Crumb = { id: string; name: string };
@@ -16,21 +17,6 @@ let items: DriveItem[] = [];
 let selected: Set<string> | null = null; // null = not in select mode
 let status: "loading" | "failed" | "ready" = "loading";
 let busy = false; // a batch move/delete is running
-
-// Small DOM builder: names always go through textContent, never innerHTML.
-function h<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  props: Partial<HTMLElementTagNameMap[K]> & Record<string, unknown> = {},
-  ...children: (Node | string | false | null | undefined)[]
-): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(props)) {
-    if (k.startsWith("aria-") || k === "role") el.setAttribute(k, String(v));
-    else (el as unknown as Record<string, unknown>)[k] = v;
-  }
-  for (const c of children) if (c) el.append(c);
-  return el;
-}
 
 // Kept across re-renders so upload failures stay visible after the list refreshes.
 const uploads = h("section", { className: "uploads", "aria-label": "Uploads", role: "region" });
@@ -71,14 +57,6 @@ function canUploadFolder() {
 }
 
 /* ---------- dialogs ---------- */
-
-function dialog(...children: Node[]): HTMLDialogElement {
-  const d = h("dialog", {}, ...children);
-  d.addEventListener("close", () => d.remove());
-  document.body.append(d);
-  d.showModal();
-  return d;
-}
 
 function askName(title: string, initial = ""): Promise<string | null> {
   return new Promise((resolve) => {
