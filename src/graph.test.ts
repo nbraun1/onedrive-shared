@@ -169,7 +169,7 @@ describe("request handling", () => {
     const err = await createGraph(tokens(), f.fn).listChildren("d", "i").catch((e) => e);
     expect(err).toBeInstanceOf(GraphError);
     expect(err.status).toBe(0);
-    expect(err.message).toBe("No connection");
+    expect(err.message).toBe("No connection (Failed to fetch)");
   });
   it("uses the Graph error message for other failures", async () => {
     const f = fakeFetch(graphError(500, "generalException"));

@@ -39,8 +39,9 @@ export function createGraph(getToken: GetToken, fetchFn: typeof fetch = (...a) =
       let res: Response;
       try {
         res = await fetchFn(url, { ...init, headers });
-      } catch {
-        throw new GraphError(0, "network", "No connection");
+      } catch (e) {
+        // Keep the browser's reason: on iOS a CORS or blocked request also lands here, not only being offline.
+        throw new GraphError(0, "network", `No connection (${e instanceof Error ? e.message : String(e)})`);
       }
       if (res.ok) return res;
       if (res.status === 401 && auth && !refreshed) {

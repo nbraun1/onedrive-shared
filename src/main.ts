@@ -373,6 +373,7 @@ function renderBrowser() {
 }
 
 /** Drag the handle up or down; on release the link moves to where its row's middle ended up. */
+// shortcut: no auto-scroll while dragging, add it if the list grows beyond one screen
 function dragToReorder(handle: HTMLElement, row: HTMLElement, list: HTMLElement, index: number) {
   handle.addEventListener("pointerdown", (e) => {
     e.preventDefault();
@@ -385,16 +386,23 @@ function dragToReorder(handle: HTMLElement, row: HTMLElement, list: HTMLElement,
     let to = index;
     row.classList.add("dragging");
     const move = (ev: PointerEvent) => {
+      if (ev.pointerId !== e.pointerId) return;
       const dy = ev.clientY - startY;
       row.style.transform = `translateY(${dy}px)`;
       to = mids.filter((m, i) => i !== index && m < mids[index] + dy).length;
     };
     const end = (ev: PointerEvent) => {
+      if (ev.pointerId !== e.pointerId) return;
       handle.removeEventListener("pointermove", move);
       handle.removeEventListener("pointerup", end);
       handle.removeEventListener("pointercancel", end);
-      if (ev.type === "pointerup") updateShares(moveShare(shares, index, to));
-      renderLinks();
+      row.classList.remove("dragging");
+      row.style.transform = "";
+      // Re-render only on a real move, so the add-link form keeps what was typed.
+      if (ev.type === "pointerup" && to !== index) {
+        updateShares(moveShare(shares, index, to));
+        renderLinks();
+      }
     };
     handle.addEventListener("pointermove", move);
     handle.addEventListener("pointerup", end);

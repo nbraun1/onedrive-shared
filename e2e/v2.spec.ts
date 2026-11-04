@@ -321,3 +321,15 @@ test.describe("reorder links", () => {
     await expect.poll(() => order(page)).toEqual(["B", "C", "A"]);
   });
 });
+
+test("tapping a reorder handle keeps what you typed", async ({ page }) => {
+  await boot(page);
+  await addLink(page, EDIT_LINK, "A");
+  await openLinks(page);
+  await page.getByLabel("Share link").fill("https://1drv.ms/f/s!typed");
+  const handle = (await page.getByRole("button", { name: "Reorder A" }).boundingBox())!;
+  await page.mouse.move(handle.x + 5, handle.y + 5);
+  await page.mouse.down();
+  await page.mouse.up();
+  await expect(page.getByLabel("Share link")).toHaveValue("https://1drv.ms/f/s!typed");
+});
