@@ -10,6 +10,7 @@ declare global {
 }
 // Playwright injects a token; import.meta.env.DEV is false in production builds, so this is dropped there.
 const testToken = () => (import.meta.env.DEV ? window.__TEST_TOKEN__ : undefined);
+export const hasTestToken = () => !!testToken();
 
 /** Finishes a pending sign-in redirect. Returns true when the user is signed in. */
 export async function initAuth(clientId: string): Promise<boolean> {
