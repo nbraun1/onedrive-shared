@@ -256,3 +256,23 @@ test.describe("viewer review fixes", () => {
     await expect(viewer(page)).toContainText("4 / 5");
   });
 });
+
+test.describe("viewer error details", () => {
+  test("shows OneDrive's error for the download link", async ({ page }) => {
+    const drive = await gallery(page);
+    drive.state.dlResponse = { status: 400, body: { error: { code: "invalidRequest", message: "Invalid select" } } };
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(viewer(page)).toContainText("Download link: OneDrive error 400 (invalidRequest): Invalid select");
+  });
+  test("says when OneDrive returns no download address", async ({ page }) => {
+    const drive = await gallery(page);
+    drive.state.dlResponse = { status: 200, body: { id: "x" } };
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(viewer(page)).toContainText("Download link: OneDrive returned no download address");
+  });
+  test("says when a video cannot be played", async ({ page }) => {
+    await gallery(page);
+    await page.getByRole("button", { name: "clip.mp4", exact: true }).click();
+    await expect(viewer(page)).toContainText("Video could not be played");
+  });
+});

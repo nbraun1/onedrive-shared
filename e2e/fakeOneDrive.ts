@@ -36,7 +36,7 @@ export async function fakeOneDrive(page: Page) {
   [...nodes.values()].find((n) => n.name === "clip.mp4")!.size = 300 * 1024 * 1024;
   const beta = [...nodes.values()].find((n) => n.name === "Beta")!;
 
-  const state = { failList: false, failUploadName: "", delayMs: 0, slowFolder: "", dlDelayMs: 0, failDownloadUrl: false, dlCalls: 0, dlRequests: [] as { url: string; range?: string }[] };
+  const state = { failList: false, failUploadName: "", delayMs: 0, slowFolder: "", dlDelayMs: 0, failDownloadUrl: false, dlResponse: null as null | { status: number; body: unknown }, dlCalls: 0, dlRequests: [] as { url: string; range?: string }[] };
   const children = (id: string) => [...nodes.values()].filter((n) => n.parent === id);
   const exists = (parent: string, name: string, except?: string) =>
     children(parent).some((n) => n.name.toLowerCase() === name.toLowerCase() && n.id !== except);
@@ -92,6 +92,7 @@ export async function fakeOneDrive(page: Page) {
       if (method === "GET") {
         if (state.dlDelayMs) await new Promise((r) => setTimeout(r, state.dlDelayMs));
         if (state.failDownloadUrl) return json(route, { error: { code: "generalException", message: "boom" } }, 500);
+        if (state.dlResponse) return json(route, state.dlResponse.body, state.dlResponse.status);
         return json(route, { id: n.id, "@microsoft.graph.downloadUrl": `https://dl.example/${n.id}/${encodeURIComponent(n.name)}?v=${++state.dlCalls}` });
       }
       if (method === "DELETE") {

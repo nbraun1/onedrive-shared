@@ -195,6 +195,6 @@ describe("getDownloadUrl", () => {
   });
   it("fails clearly without one", async () => {
     const f = fakeFetch(json({ id: "i" }));
-    await expect(createGraph(tokens(), f.fn).getDownloadUrl("d", "i")).rejects.toThrow("This file can't be downloaded");
+    await expect(createGraph(tokens(), f.fn).getDownloadUrl("d", "i")).rejects.toThrow("OneDrive returned no download address");
   });
 });

@@ -103,3 +103,4 @@ dialog.viewer[open] { display: flex; flex-direction: column; }
 .viewer .nav.prev { left: calc(4px + env(safe-area-inset-left)); }
 .viewer .nav.next { right: calc(4px + env(safe-area-inset-right)); }
 .viewer .nav:disabled { opacity: 0.15; }
+.viewer .reason { font-size: 0.85em; overflow-wrap: anywhere; max-width: 90vw; }

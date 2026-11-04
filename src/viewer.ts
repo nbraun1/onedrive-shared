@@ -1,5 +1,5 @@
 import { dialog, h } from "./dom";
-import type { DriveItem, Graph } from "./graph";
+import { GraphError, type DriveItem, type Graph } from "./graph";
 
 export type ViewKind = "image" | "video" | "audio" | "text";
 
@@ -120,11 +120,15 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     stage.replaceChildren();
   }
 
-  function fail(my: number) {
+  function fail(my: number, reason: string) {
     if (my !== seq) return;
     clearStage();
-    stage.append(h("div", { className: "hint" }, h("p", {}, "Can't show this file here"), h("button", { onclick: openInOneDrive }, "Open in OneDrive")));
+    stage.append(
+      h("div", { className: "hint" }, h("p", {}, "Can't show this file here"), h("p", { className: "reason" }, reason), h("button", { onclick: openInOneDrive }, "Open in OneDrive")),
+    );
   }
+  const describe = (e: unknown) =>
+    e instanceof GraphError && e.status > 0 ? `OneDrive error ${e.status} (${e.code}): ${e.message}` : e instanceof Error ? e.message : String(e);
 
   async function show() {
     const my = ++seq;
@@ -141,22 +145,28 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     let src: string;
     try {
       src = await graph.getDownloadUrl(driveId, item.id); // fresh each time: these URLs expire
-    } catch {
-      return fail(my);
+    } catch (e) {
+      return fail(my, `Download link: ${describe(e)}`);
     }
     if (my !== seq) return;
     save.disabled = false;
     const kind = viewKind(item);
     let el: HTMLElement;
-    if (kind === "image") el = h("img", { src, alt: item.name, draggable: false, onerror: () => fail(my) });
+    if (kind === "image") el = h("img", { src, alt: item.name, draggable: false, onerror: () => fail(my, "Image could not be loaded") });
     else if (kind === "video" || kind === "audio")
-      el = h(kind, { src, controls: true, playsInline: true, preload: "metadata", onerror: () => fail(my) });
+      el = h(kind, {
+        src,
+        controls: true,
+        playsInline: true,
+        preload: "metadata",
+        onerror: (e: Event | string) => fail(my, `${kind === "video" ? "Video" : "Audio"} could not be played (code ${((e as Event).target as HTMLMediaElement).error?.code ?? "?"})`),
+      });
     else {
       let start: { text: string; cut: boolean };
       try {
         start = await readStart(await fetchStart(src), TEXT_LIMIT);
-      } catch {
-        return fail(my);
+      } catch (e) {
+        return fail(my, `Text: ${describe(e)}`);
       }
       if (my !== seq) return;
       const cut = start.cut || (item.size ?? 0) > TEXT_LIMIT;

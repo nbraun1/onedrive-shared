@@ -100,7 +100,7 @@ export function createGraph(getToken: GetToken, fetchFn: typeof fetch = (...a) =
     async getDownloadUrl(driveId: string, id: string): Promise<string> {
       const r = await call<{ "@microsoft.graph.downloadUrl"?: string }>(`${item(driveId, id)}?$select=id,@microsoft.graph.downloadUrl`);
       const url = r["@microsoft.graph.downloadUrl"];
-      if (!url) throw new GraphError(0, "noDownloadUrl", "This file can't be downloaded");
+      if (!url) throw new GraphError(0, "noDownloadUrl", "OneDrive returned no download address");
       return url;
     },
 
