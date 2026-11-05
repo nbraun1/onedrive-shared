@@ -13,7 +13,9 @@ export type DriveItem = {
   webUrl?: string;
   folder?: { childCount?: number };
   file?: { mimeType?: string };
-  thumbnails?: { small?: { url: string } }[];
+  thumbnails?: { small?: { url: string }; medium?: { url: string }; large?: { url: string } }[];
+  "@microsoft.graph.downloadUrl"?: string;
+  "@content.downloadUrl"?: string;
   parentReference?: { driveId?: string; id?: string };
 };
 

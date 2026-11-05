@@ -24,6 +24,26 @@ export function viewKind(item: DriveItem): ViewKind | null {
   return mime === "text/plain" ? "text" : null;
 }
 
+const LISTING_URL_TTL = 50 * 60_000; // OneDrive's download URLs live about an hour
+
+/** The download URL that came with the folder listing, while it is still fresh. */
+export function listingUrl(item: DriveItem, listedAt: number, now: number): string | null {
+  if (now - listedAt >= LISTING_URL_TTL) return null;
+  return item["@microsoft.graph.downloadUrl"] ?? item["@content.downloadUrl"] ?? null;
+}
+
+/** The biggest thumbnail that came with the listing; shown instantly while the original loads. */
+export function previewUrl(item: DriveItem): string | null {
+  const t = item.thumbnails?.[0];
+  return t?.large?.url ?? t?.medium?.url ?? t?.small?.url ?? null;
+}
+
+export function slideWindow(index: number, count: number, radius = 2): number[] {
+  const out: number[] = [];
+  for (let i = Math.max(0, index - radius); i <= Math.min(count - 1, index + radius); i++) out.push(i);
+  return out;
+}
+
 const TEXT_LIMIT = 1024 * 1024;
 const BLOB_LIMIT = 200 * 1024 * 1024; // larger files would exhaust an iPhone's memory as a blob
 
