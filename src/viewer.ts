@@ -46,6 +46,8 @@ export function slideWindow(index: number, count: number, radius = 2): number[] 
 
 const TEXT_LIMIT = 1024 * 1024;
 const BLOB_LIMIT = 200 * 1024 * 1024; // larger files would exhaust an iPhone's memory as a blob
+const ZOOM_STEP = 1.25;
+const MAX_ZOOM = 8;
 
 /** Reads at most `limit` bytes of a text body and cancels the rest of the download. */
 export async function readStart(res: Response, limit: number): Promise<{ text: string; cut: boolean }> {
@@ -86,6 +88,8 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
   const slides = new Map<number, HTMLElement>(); // only index-1..index+1 exist
   const warmed = new Set<number>();
   const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const mouse = window.matchMedia?.("(hover: hover) and (pointer: fine)").matches; // desktop zoom; phones pinch the page
+  let zoom = { s: 1, x: 0, y: 0 }; // x/y: pan in px from the centre
 
   const title = h("span", { className: "title" });
   const counter = h("span", { className: "counter" });
@@ -95,8 +99,11 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
   const stage = h("div", { className: "stage" }, track);
   const prev = h("button", { className: "nav prev", "aria-label": "Previous", onclick: () => step(-1) }, "‹");
   const next = h("button", { className: "nav next", "aria-label": "Next", onclick: () => step(1) }, "›");
+  const zoomOut = h("button", { "aria-label": "Zoom out", onclick: () => zoomTo(zoom.s / ZOOM_STEP) }, "−");
+  const zoomIn = h("button", { "aria-label": "Zoom in", onclick: () => zoomTo(zoom.s * ZOOM_STEP) }, "+");
+  const fit = h("button", { "aria-label": "Fit", onclick: () => zoomTo(1) }, "Fit");
   const d = dialog(
-    h("div", { className: "bar" }, title, counter, save, h("button", { onclick: openInOneDrive }, "Open in OneDrive"), h("button", { onclick: () => d.close() }, "Close")),
+    h("div", { className: "bar" }, title, counter, mouse && zoomOut, mouse && zoomIn, mouse && fit, save, h("button", { onclick: openInOneDrive }, "Open in OneDrive"), h("button", { onclick: () => d.close() }, "Close")),
     stage,
     prev,
     next,
@@ -107,6 +114,16 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
   const onKey = (e: KeyboardEvent) => {
     if (e.key === "ArrowLeft") step(-1);
     if (e.key === "ArrowRight") step(1);
+    if (!mouse || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key === "+" || e.key === "=") zoomTo(zoom.s * ZOOM_STEP);
+    if (e.key === "-") zoomTo(zoom.s / ZOOM_STEP);
+    if (e.key === "0") zoomTo(1);
+    const video = zoom.s > 1 && slides.get(index)?.querySelector("video");
+    if (e.key === " " && video) {
+      e.preventDefault(); // a focused video would toggle itself as well
+      if (video.paused) void video.play();
+      else video.pause();
+    }
   };
   window.addEventListener("keydown", onKey);
   d.addEventListener("close", () => {
@@ -255,7 +272,48 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     prev.disabled = index === 0;
     next.disabled = index === files.length - 1;
     if (viewKind(item) === "text" && !current.querySelector("pre, .hint button")) loadText(index, current);
+    applyZoom();
   }
+
+  /* ---------- zoom (desktop) ---------- */
+
+  const zoomable = () => [...(slides.get(index)?.querySelectorAll<HTMLElement>("img, video") ?? [])];
+
+  function applyZoom() {
+    const els = zoomable();
+    if (!els.length) zoom = { s: 1, x: 0, y: 0 }; // e.g. a video that failed and became a message
+    const mx = ((zoom.s - 1) * stage.clientWidth) / 2;
+    const my = ((zoom.s - 1) * stage.clientHeight) / 2;
+    zoom.x = Math.max(-mx, Math.min(mx, zoom.x)); // keep the photo on the stage
+    zoom.y = Math.max(-my, Math.min(my, zoom.y));
+    const t = zoom.s === 1 ? "" : `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})`;
+    for (const el of els) {
+      el.style.transform = t;
+      if (el instanceof HTMLVideoElement) el.controls = zoom.s === 1; // the controls would scale and move away
+    }
+    zoomOut.disabled = fit.disabled = zoom.s === 1;
+    zoomIn.disabled = !els.length || zoom.s >= MAX_ZOOM;
+  }
+
+  /** (px, py): the point, relative to the stage centre, that stays where it is. */
+  function zoomTo(s: number, px = 0, py = 0) {
+    const to = s < 1.01 ? 1 : Math.min(MAX_ZOOM, s);
+    const k = to / zoom.s;
+    zoom = { s: to, x: px - (px - zoom.x) * k, y: py - (py - zoom.y) * k };
+    applyZoom();
+  }
+
+  if (mouse)
+    stage.addEventListener(
+      "wheel",
+      (e) => {
+        if (e.ctrlKey || !e.deltaY || !zoomable().length) return; // Ctrl+wheel stays the browser's page zoom
+        e.preventDefault();
+        const r = stage.getBoundingClientRect();
+        zoomTo(e.deltaY < 0 ? zoom.s * ZOOM_STEP : zoom.s / ZOOM_STEP, e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2);
+      },
+      { passive: false },
+    );
 
   /* ---------- moving ---------- */
 
@@ -280,15 +338,20 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     finish();
     const i = index + delta;
     if (i < 0 || i >= files.length || i === index) return setTrack(0, true);
+    zoomTo(1); // the next file starts at fit
     const width = stage.clientWidth;
     animating = { to: i, timer: window.setTimeout(finish, reduceMotion ? 0 : 200) };
     setTrack((index - i) * width, true);
   }
 
-  let drag: { x: number; y: number; dx: number; horizontal: boolean | null } | null = null;
+  let drag: { x: number; y: number; dx: number; horizontal: boolean | null; pan?: { x: number; y: number } } | null = null;
   stage.addEventListener("pointerdown", (e) => {
     if (!e.isPrimary) {
       drag = null; // a second finger means pinch-zoom, not a swipe
+      return;
+    }
+    if (zoom.s > 1) {
+      drag = { x: e.clientX, y: e.clientY, dx: 0, horizontal: null, pan: { x: zoom.x, y: zoom.y } }; // zoomed: drag pans
       return;
     }
     const t = e.target;
@@ -304,6 +367,18 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     if (!drag || !e.isPrimary) return;
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
+    if (drag.pan) {
+      if (drag.horizontal === null && Math.abs(dx) + Math.abs(dy) > 8) {
+        drag.horizontal = false; // moved: not a tap, and never a swipe
+        stage.setPointerCapture?.(e.pointerId);
+      }
+      if (drag.horizontal === false) {
+        zoom.x = drag.pan.x + dx;
+        zoom.y = drag.pan.y + dy;
+        applyZoom();
+      }
+      return;
+    }
     if (drag.horizontal === null && Math.abs(dx) + Math.abs(dy) > 8) {
       drag.horizontal = Math.abs(dx) > Math.abs(dy);
       // only now: capturing at pointerdown would steal the click from buttons inside the slide

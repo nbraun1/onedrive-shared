@@ -68,7 +68,7 @@ The browser's Back button, a mouse's back button and the iPhone's swipe from the
 
 ## Viewing files
 
-Tap a file to open it full screen. Images (including iPhone HEIC photos), videos (MP4/MOV), audio and text files open in the app, as far as the browser can play them. Swipe left/right or use ‹ › to go through the folder. Tap the photo or video to hide all buttons; tap again to show them. Anything else (PDF, Office, …) opens in OneDrive. If a file can't be shown, the viewer says why (for example the OneDrive error), with a button to open it in OneDrive.
+Tap a file to open it full screen. Images (including iPhone HEIC photos), videos (MP4/MOV), audio and text files open in the app, as far as the browser can play them. Swipe left/right or use ‹ › to go through the folder. Tap the photo or video to hide all buttons; tap again to show them. On a desktop browser, zoom photos and videos with **− / + / Fit**, the mouse wheel or the keys `+` `-` `0`, and drag to move around; while a video is zoomed, Space plays and pauses it. On the iPhone, pinch to zoom. Anything else (PDF, Office, …) opens in OneDrive. If a file can't be shown, the viewer says why (for example the OneDrive error), with a button to open it in OneDrive.
 
 **Save** prepares the file and then shows **Save / Share**: tap it to open the iOS share sheet ("Save Image" / "Save Video"). Files larger than 200 MB open the download directly instead, to keep the app from running out of memory.
 

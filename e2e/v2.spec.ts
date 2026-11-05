@@ -859,3 +859,117 @@ test.describe("navigation review fixes", () => {
     await expect.poll(() => viewer(page).locator(".bar").evaluate((b) => getComputedStyle(b).visibility)).toBe("hidden");
   });
 });
+
+test("touch devices get no zoom buttons", async ({ page }) => {
+  await gallery(page);
+  await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+  await expect(original(page)).toHaveAttribute("src", /photo1/);
+  await expect(viewer(page).getByRole("button", { name: "Zoom in" })).toHaveCount(0);
+});
+
+test.describe("desktop zoom", () => {
+  const { defaultBrowserType: _, ...desktop } = devices["Desktop Chrome"];
+  test.use(desktop);
+  const zoomIn = (page: Page) => viewer(page).getByRole("button", { name: "Zoom in" });
+  const zoomOut = (page: Page) => viewer(page).getByRole("button", { name: "Zoom out" });
+  const fit = (page: Page) => viewer(page).getByRole("button", { name: "Fit" });
+  const transform = (page: Page, sel = "img.original") => viewer(page).locator(`.slide.current ${sel}`).evaluate((el) => (el as HTMLElement).style.transform);
+  async function photo(page: Page) {
+    await gallery(page);
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(original(page)).toHaveAttribute("src", /photo1/);
+  }
+
+  test("buttons zoom in, out and back to fit, within 1× to 8×", async ({ page }) => {
+    await photo(page);
+    await expect(zoomOut(page)).toBeDisabled();
+    await expect(fit(page)).toBeDisabled();
+    await zoomIn(page).click();
+    await zoomIn(page).click();
+    expect(await transform(page)).toContain("scale(1.5625)");
+    await zoomOut(page).click();
+    expect(await transform(page)).toContain("scale(1.25)");
+    await fit(page).click();
+    expect(await transform(page)).toBe("");
+    for (let i = 0; i < 12; i++) await page.keyboard.press("+");
+    await expect(zoomIn(page)).toBeDisabled();
+    expect(await transform(page)).toContain("scale(8)");
+    await page.keyboard.press("-");
+    expect(await transform(page)).toContain("scale(6.4)");
+    await page.keyboard.press("0");
+    expect(await transform(page)).toBe("");
+  });
+
+  test("the mouse wheel zooms, Ctrl+wheel is left to the browser", async ({ page }) => {
+    await photo(page);
+    const box = (await viewer(page).locator(".stage").boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.wheel(0, -100);
+    await expect.poll(() => transform(page)).toContain("scale(1.25)");
+    await page.mouse.wheel(0, 100);
+    await expect.poll(() => transform(page)).toBe("");
+    await page.keyboard.down("Control");
+    await page.mouse.wheel(0, -100);
+    await page.keyboard.up("Control");
+    await page.waitForTimeout(100);
+    expect(await transform(page)).toBe("");
+  });
+
+  test("dragging a zoomed photo pans it; arrows go on and start at fit", async ({ page }) => {
+    await photo(page);
+    await zoomIn(page).click();
+    await zoomIn(page).click();
+    const box = (await viewer(page).locator(".stage").boundingBox())!;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width / 2, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 - 300, y, { steps: 5 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+    await expect(viewer(page)).toContainText("3 / 5");
+    expect(await transform(page)).toMatch(/translate\(-\d/);
+    await page.keyboard.press("ArrowRight");
+    await expect(viewer(page)).toContainText("4 / 5");
+    await expect(original(page)).toHaveAttribute("src", /photo2/);
+    expect(await transform(page)).toBe("");
+    await expect(fit(page)).toBeDisabled();
+  });
+
+  test("text and audio can't be zoomed", async ({ page }) => {
+    await gallery(page);
+    await page.getByRole("button", { name: "notes.txt", exact: true }).click();
+    await expect(viewer(page)).toContainText("2 / 5");
+    await expect(zoomIn(page)).toBeDisabled();
+    await page.keyboard.press("+");
+    await expect(zoomOut(page)).toBeDisabled();
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "song.wav", exact: true }).click();
+    await expect(viewer(page)).toContainText("5 / 5");
+    await expect(zoomIn(page)).toBeDisabled();
+  });
+
+  test("a zoomed video hides its controls and Space plays it", async ({ page }) => {
+    await page.addInitScript(() => {
+      const w = window as unknown as { plays: number };
+      w.plays = 0;
+      HTMLMediaElement.prototype.play = function () {
+        w.plays++;
+        return Promise.resolve();
+      };
+    });
+    await gallery(page);
+    await page.route(/clip\.mp4/, () => {}); // never answers: the fake bytes would turn the player into an error
+    await page.getByRole("button", { name: "clip.mp4", exact: true }).click();
+    await expect(viewer(page)).toContainText("1 / 5");
+    const video = viewer(page).locator(".slide.current video");
+    await zoomIn(page).click();
+    expect(await transform(page, "video")).toContain("scale(1.25)");
+    await expect(video).not.toHaveAttribute("controls");
+    await video.focus();
+    await page.keyboard.press(" ");
+    expect(await page.evaluate(() => (window as unknown as { plays: number }).plays)).toBe(1);
+    await fit(page).click();
+    await expect(video).toHaveAttribute("controls");
+    expect(await transform(page, "video")).toBe("");
+  });
+});
