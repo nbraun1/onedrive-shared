@@ -718,3 +718,59 @@ test.describe("folder cache", () => {
     await expect(page.getByRole("button", { name: "Added elsewhere", exact: true })).toBeVisible();
   });
 });
+
+test.describe("focus mode", () => {
+  const ui = (page: Page) => viewer(page).locator(".bar");
+  const hidden = (page: Page) => viewer(page).evaluate((d) => d.classList.contains("immersive"));
+  async function tap(page: Page, at = 0.5) {
+    const box = (await viewer(page).locator(".stage").boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height * at);
+  }
+
+  test("a tap hides the buttons and arrows, another tap shows them", async ({ page }) => {
+    await gallery(page);
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(ui(page)).toBeVisible();
+    await tap(page);
+    await expect.poll(() => hidden(page)).toBe(true);
+    await expect.poll(() => ui(page).evaluate((b) => getComputedStyle(b).opacity)).toBe("0");
+    await expect.poll(() => viewer(page).locator(".nav.next").evaluate((b) => getComputedStyle(b).opacity)).toBe("0");
+    await tap(page);
+    await expect.poll(() => hidden(page)).toBe(false);
+    await expect.poll(() => ui(page).evaluate((b) => getComputedStyle(b).opacity)).toBe("1");
+  });
+
+  test("swiping does not toggle it, and it stays while swiping", async ({ page }) => {
+    await gallery(page);
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await tap(page);
+    await expect.poll(() => hidden(page)).toBe(true);
+    const box = (await viewer(page).locator(".stage").boundingBox())!;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width * 0.8, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.2, y, { steps: 6 });
+    await page.mouse.up();
+    await expect(viewer(page)).toContainText("4 / 5");
+    expect(await hidden(page)).toBe(true);
+  });
+
+  test("a new viewer starts with the buttons visible", async ({ page }) => {
+    await gallery(page);
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await tap(page);
+    await expect.poll(() => hidden(page)).toBe(true);
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "photo2.png", exact: true }).click();
+    expect(await hidden(page)).toBe(false);
+  });
+
+  test("using the audio controls does not toggle it", async ({ page }) => {
+    await gallery(page);
+    await page.getByRole("button", { name: "song.wav", exact: true }).click();
+    const box = (await viewer(page).locator(".slide.current audio").boundingBox())!;
+    await page.mouse.click(box.x + 20, box.y + box.height * 0.9);
+    await page.waitForTimeout(200);
+    expect(await hidden(page)).toBe(false);
+  });
+});

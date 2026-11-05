@@ -315,6 +315,7 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     if (!drag || !e.isPrimary) return;
     const { dx, horizontal } = drag;
     drag = null;
+    if (horizontal === null) return void d.classList.toggle("immersive"); // a tap: focus on the photo, or back
     if (!horizontal) return;
     if (Math.abs(dx) > stage.clientWidth * 0.2) step(dx < 0 ? 1 : -1);
     else setTrack(0, true);

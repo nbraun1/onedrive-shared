@@ -81,6 +81,8 @@ dialog.viewer {
 }
 dialog.viewer[open] { display: flex; flex-direction: column; }
 .viewer .bar {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 1; /* over the photo, so hiding it doesn't move the photo */
+  background: linear-gradient(rgb(0 0 0 / 0.75), rgb(0 0 0 / 0));
   display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
   padding: calc(6px + env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) 6px calc(8px + env(safe-area-inset-left));
 }
@@ -113,3 +115,7 @@ dialog.viewer[open] { display: flex; flex-direction: column; }
 .items li.dragging { position: relative; z-index: 2; background: var(--field); box-shadow: 0 4px 16px rgb(0 0 0 / 0.25); }
 /* the folder list behind the full-screen viewer must not scroll or show its scrollbar */
 html:has(dialog.viewer[open]) { overflow: hidden; }
+
+/* focus mode: a tap on the photo hides everything but the photo */
+.viewer .bar, .viewer .nav, .viewer .slide .note { transition: opacity 150ms; }
+dialog.viewer.immersive .bar, dialog.viewer.immersive .nav, dialog.viewer.immersive .slide .note { opacity: 0; pointer-events: none; }
