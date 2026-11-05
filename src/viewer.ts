@@ -126,12 +126,17 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     }
   };
   window.addEventListener("keydown", onKey);
+  // pinch-zoomed on a phone: one finger must pan sideways too, not only up and down (see .zoomed in style.css)
+  const onViewport = () => d.classList.toggle("zoomed", (window.visualViewport?.scale ?? 1) > 1);
+  onViewport();
+  window.visualViewport?.addEventListener("resize", onViewport);
   d.addEventListener("close", () => {
     closed = true;
     seq++; // stops a running Save and late async results
     if (animating) clearTimeout(animating.timer);
     animating = null;
     window.removeEventListener("keydown", onKey);
+    window.visualViewport?.removeEventListener("resize", onViewport);
     for (const i of [...slides.keys()]) drop(i);
   });
 

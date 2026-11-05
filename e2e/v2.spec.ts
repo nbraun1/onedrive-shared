@@ -867,6 +867,46 @@ test("touch devices get no zoom buttons", async ({ page }) => {
   await expect(viewer(page).getByRole("button", { name: "Zoom in" })).toHaveCount(0);
 });
 
+test.describe("pinch-zoomed on a phone", () => {
+  // Playwright can't pinch: fake the page zoom the viewer reads
+  const fakeScale = () =>
+    Object.defineProperty(VisualViewport.prototype, "scale", { get: () => (window as unknown as { __scale?: number }).__scale ?? 1 });
+  const setScale = (page: Page, s: number) =>
+    page.evaluate((s) => {
+      (window as unknown as { __scale: number }).__scale = s;
+      window.visualViewport!.dispatchEvent(new Event("resize"));
+    }, s);
+  const touchAction = (page: Page) => viewer(page).locator(".stage").evaluate((el) => getComputedStyle(el).touchAction);
+
+  test("one finger pans in every direction while zoomed, swipes again at normal size", async ({ page }) => {
+    await page.addInitScript(fakeScale);
+    await gallery(page);
+    await page.getByRole("button", { name: "photo2.png", exact: true }).click();
+    await expect(viewer(page)).toContainText("4 / 5");
+    expect(await touchAction(page)).toBe("pan-y pinch-zoom");
+    await setScale(page, 2);
+    expect(await touchAction(page)).toBe("auto");
+    await setScale(page, 1);
+    expect(await touchAction(page)).toBe("pan-y pinch-zoom");
+    const box = (await viewer(page).locator(".stage").boundingBox())!;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + 50, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 200, y, { steps: 5 });
+    await page.mouse.up();
+    await expect(viewer(page)).toContainText("3 / 5");
+  });
+
+  test("a viewer opened while still zoomed pans right away", async ({ page }) => {
+    await page.addInitScript(fakeScale);
+    await gallery(page);
+    await page.evaluate(() => ((window as unknown as { __scale: number }).__scale = 2));
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(viewer(page)).toContainText("3 / 5");
+    expect(await touchAction(page)).toBe("auto");
+  });
+});
+
 test.describe("desktop zoom", () => {
   const { defaultBrowserType: _, ...desktop } = devices["Desktop Chrome"];
   test.use(desktop);
