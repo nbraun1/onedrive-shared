@@ -282,8 +282,19 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
   function applyZoom() {
     const els = zoomable();
     if (!els.length) zoom = { s: 1, x: 0, y: 0 }; // e.g. a video that failed and became a message
-    const mx = ((zoom.s - 1) * stage.clientWidth) / 2;
-    const my = ((zoom.s - 1) * stage.clientHeight) / 2;
+    // the visible picture, not the element: a photo's <img> fills the stage, its pixels are letterboxed inside
+    const W = stage.clientWidth;
+    const H = stage.clientHeight;
+    let cw = 0;
+    let ch = 0;
+    for (const el of els) {
+      const img = el instanceof HTMLImageElement && el.naturalWidth ? el : null;
+      const f = img ? Math.min(W / img.naturalWidth, H / img.naturalHeight) : 1;
+      cw = Math.max(cw, img ? img.naturalWidth * f : el.offsetWidth);
+      ch = Math.max(ch, img ? img.naturalHeight * f : el.offsetHeight);
+    }
+    const mx = Math.max(0, (zoom.s * cw - W) / 2);
+    const my = Math.max(0, (zoom.s * ch - H) / 2);
     zoom.x = Math.max(-mx, Math.min(mx, zoom.x)); // keep the photo on the stage
     zoom.y = Math.max(-my, Math.min(my, zoom.y));
     const t = zoom.s === 1 ? "" : `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.s})`;
@@ -310,7 +321,9 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
         if (e.ctrlKey || !e.deltaY || !zoomable().length) return; // Ctrl+wheel stays the browser's page zoom
         e.preventDefault();
         const r = stage.getBoundingClientRect();
-        zoomTo(e.deltaY < 0 ? zoom.s * ZOOM_STEP : zoom.s / ZOOM_STEP, e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2);
+        const dy = e.deltaY * (e.deltaMode === 1 ? 33 : 1); // Firefox reports lines
+        // by distance, so a mouse notch (100 px) is one step and a trackpad's many small events add up the same
+        zoomTo(zoom.s * ZOOM_STEP ** (-dy / 100), e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2);
       },
       { passive: false },
     );
@@ -350,6 +363,7 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
       drag = null; // a second finger means pinch-zoom, not a swipe
       return;
     }
+    if (e.button !== 0) return; // a right-click opens the context menu, its pointerup may never come
     if (zoom.s > 1) {
       drag = { x: e.clientX, y: e.clientY, dx: 0, horizontal: null, pan: { x: zoom.x, y: zoom.y } }; // zoomed: drag pans
       return;
@@ -365,6 +379,12 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
   });
   stage.addEventListener("pointermove", (e) => {
     if (!drag || !e.isPrimary) return;
+    if (e.pointerType === "mouse" && !e.buttons) {
+      // released where the stage didn't see it (e.g. over the bar): don't follow a hovering mouse
+      if (drag.horizontal) setTrack(0, true);
+      drag = null;
+      return;
+    }
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
     if (drag.pan) {

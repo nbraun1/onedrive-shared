@@ -917,8 +917,7 @@ test.describe("desktop zoom", () => {
 
   test("dragging a zoomed photo pans it; arrows go on and start at fit", async ({ page }) => {
     await photo(page);
-    await zoomIn(page).click();
-    await zoomIn(page).click();
+    for (let i = 0; i < 4; i++) await zoomIn(page).click(); // 2.44×: wider than the stage, so there is room to pan
     const box = (await viewer(page).locator(".stage").boundingBox())!;
     const y = box.y + box.height / 2;
     await page.mouse.move(box.x + box.width / 2, y);
@@ -933,6 +932,58 @@ test.describe("desktop zoom", () => {
     await expect(original(page)).toHaveAttribute("src", /photo2/);
     expect(await transform(page)).toBe("");
     await expect(fit(page)).toBeDisabled();
+  });
+
+  test("a zoomed portrait photo can't be dragged off the screen", async ({ page }) => {
+    await gallery(page);
+    await page.getByRole("button", { name: "photo2.png", exact: true }).click();
+    await expect(original(page)).not.toHaveClass(/loading/);
+    for (let i = 0; i < 10; i++) await page.keyboard.press("+");
+    const box = (await viewer(page).locator(".stage").boundingBox())!;
+    const y = box.y + box.height / 2;
+    for (let i = 0; i < 4; i++) {
+      // the browser only reports moves inside the window: drag across it several times
+      await page.mouse.move(box.x + box.width * 0.8, y); // not on the › button over the edge
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width * 0.2, y, { steps: 5 });
+      await page.mouse.up();
+    }
+    const { x, bound } = await original(page).evaluate((img: HTMLImageElement) => {
+      const stage = img.closest(".stage")!;
+      const fit = Math.min(stage.clientWidth / img.naturalWidth, stage.clientHeight / img.naturalHeight);
+      return { x: Number(/translate\((-?[\d.]+)px/.exec(img.style.transform)![1]), bound: (8 * img.naturalWidth * fit - stage.clientWidth) / 2 };
+    });
+    expect(x).toBeLessThan(0);
+    expect(-x).toBeLessThanOrEqual(bound + 1); // the picture's right edge stays at the stage's right edge
+  });
+
+  test("only a pressed left button pans", async ({ page }) => {
+    await photo(page);
+    await zoomIn(page).click();
+    await zoomIn(page).click();
+    const before = await transform(page);
+    const box = (await viewer(page).locator(".stage").boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down({ button: "right" });
+    await page.mouse.move(box.x + box.width / 2 - 200, box.y + box.height / 2, { steps: 5 });
+    await page.mouse.up({ button: "right" });
+    expect(await transform(page)).toBe(before);
+    // a pointerup that never reached the stage (context menu, release over the bar): hovering must not pan
+    await viewer(page).locator(".stage").evaluate((stage) => {
+      const at = (type: string, x: number, buttons: number) =>
+        stage.dispatchEvent(new PointerEvent(type, { bubbles: true, isPrimary: true, pointerType: "mouse", button: 0, buttons, clientX: x, clientY: 300 }));
+      at("pointerdown", 600, 1);
+      at("pointermove", 400, 0);
+    });
+    expect(await transform(page)).toBe(before);
+  });
+
+  test("a trackpad's many small wheel events zoom gently", async ({ page }) => {
+    await photo(page);
+    const box = (await viewer(page).locator(".stage").boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    for (let i = 0; i < 10; i++) await page.mouse.wheel(0, -10);
+    await expect.poll(async () => Number(/scale\(([\d.]+)\)/.exec(await transform(page))?.[1] ?? 1)).toBeCloseTo(1.25, 2);
   });
 
   test("text and audio can't be zoomed", async ({ page }) => {
