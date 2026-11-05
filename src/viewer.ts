@@ -299,13 +299,16 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     if ((window.visualViewport?.scale ?? 1) > 1) return; // zoomed in: one finger pans the photo
     finish();
     drag = { x: e.clientX, y: e.clientY, dx: 0, horizontal: null };
-    stage.setPointerCapture?.(e.pointerId); // keep getting the release outside the photo
   });
   stage.addEventListener("pointermove", (e) => {
     if (!drag || !e.isPrimary) return;
     const dx = e.clientX - drag.x;
     const dy = e.clientY - drag.y;
-    if (drag.horizontal === null && Math.abs(dx) + Math.abs(dy) > 8) drag.horizontal = Math.abs(dx) > Math.abs(dy);
+    if (drag.horizontal === null && Math.abs(dx) + Math.abs(dy) > 8) {
+      drag.horizontal = Math.abs(dx) > Math.abs(dy);
+      // only now: capturing at pointerdown would steal the click from buttons inside the slide
+      if (drag.horizontal) stage.setPointerCapture?.(e.pointerId); // keep getting the release outside the photo
+    }
     if (!drag.horizontal) return;
     const edge = (dx > 0 && index === 0) || (dx < 0 && index === files.length - 1);
     drag.dx = edge ? dx / 3 : dx; // resist past the first and last file
@@ -315,7 +318,11 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     if (!drag || !e.isPrimary) return;
     const { dx, horizontal } = drag;
     drag = null;
-    if (horizontal === null) return void d.classList.toggle("immersive"); // a tap: focus on the photo, or back
+    if (horizontal === null) {
+      // a tap on the photo/video toggles focus mode; taps on buttons or text do their own thing
+      if (!(e.target as Element).closest("button, a, .text")) d.classList.toggle("immersive");
+      return;
+    }
     if (!horizontal) return;
     if (Math.abs(dx) > stage.clientWidth * 0.2) step(dx < 0 ? 1 : -1);
     else setTrack(0, true);

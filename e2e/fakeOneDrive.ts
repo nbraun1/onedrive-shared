@@ -88,9 +88,10 @@ export async function fakeOneDrive(page: Page) {
       if (method === "GET") {
         const folderName = nodes.get(m[1])!.name;
         state.listCalls[folderName] = (state.listCalls[folderName] ?? 0) + 1;
+        const value = children(m[1]).map(dto); // the answer as of the request, like a real slow response
         if (nodes.get(m[1])?.name === state.slowFolder) await new Promise((r) => setTimeout(r, 1500));
         if (state.failList) return json(route, { error: { code: "generalException", message: "Server exploded" } }, 500);
-        return json(route, { value: children(m[1]).map(dto) });
+        return json(route, { value });
       }
       const body = req.postDataJSON();
       if (exists(m[1], body.name)) return conflict(route);

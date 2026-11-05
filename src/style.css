@@ -117,5 +117,5 @@ dialog.viewer[open] { display: flex; flex-direction: column; }
 html:has(dialog.viewer[open]) { overflow: hidden; }
 
 /* focus mode: a tap on the photo hides everything but the photo */
-.viewer .bar, .viewer .nav, .viewer .slide .note { transition: opacity 150ms; }
-dialog.viewer.immersive .bar, dialog.viewer.immersive .nav, dialog.viewer.immersive .slide .note { opacity: 0; pointer-events: none; }
+.viewer .bar, .viewer .nav, .viewer .slide .note { transition: opacity 150ms, visibility 150ms; }
+dialog.viewer.immersive .bar, dialog.viewer.immersive .nav, dialog.viewer.immersive .slide .note { opacity: 0; visibility: hidden; } /* hidden: out of Tab order too */

@@ -774,3 +774,88 @@ test.describe("focus mode", () => {
     expect(await hidden(page)).toBe(false);
   });
 });
+
+test.describe("navigation review fixes", () => {
+  const at = async (page: Page, folder: string) => expect(crumbs(page).locator("button").last()).toHaveText(folder);
+  const back = (page: Page) => page.evaluate(() => history.back());
+  async function toMany(page: Page) {
+    const drive = await boot(page);
+    await addLink(page, EDIT_LINK);
+    await page.getByRole("button", { name: "Alpha", exact: true }).click();
+    await page.getByRole("button", { name: "Many", exact: true }).click();
+    await at(page, "Many");
+    return drive;
+  }
+
+  test("a photo opens after going back to a cached folder", async ({ page }) => {
+    const drive = await toMany(page);
+    await page.getByRole("button", { name: "Deep", exact: true }).click();
+    await at(page, "Deep");
+    const before = drive.state.listCalls["Many"];
+    await back(page);
+    await at(page, "Many");
+    await expect.poll(() => drive.state.listCalls["Many"]).toBe(before + 1); // background check done
+    await page.getByRole("button", { name: "img20.jpg", exact: true }).click();
+    await expect(viewer(page)).toContainText("11 / 40");
+    await expect(original(page)).toHaveAttribute("src", /img20\.jpg/);
+  });
+
+  test("a reload with the viewer open leaves no dead back step", async ({ page }) => {
+    await toMany(page);
+    await page.getByRole("button", { name: "img20.jpg", exact: true }).click();
+    await expect(viewer(page)).toBeVisible();
+    await page.reload();
+    await at(page, "Many");
+    await back(page);
+    await at(page, "Alpha");
+  });
+
+  test("Forward into a closed viewer's step leaves no dead back step", async ({ page }) => {
+    await toMany(page);
+    await page.getByRole("button", { name: "img20.jpg", exact: true }).click();
+    await page.keyboard.press("Escape");
+    await expect.poll(() => page.evaluate(() => !!history.state?.viewer)).toBe(false);
+    await page.evaluate(() => history.forward());
+    await page.waitForTimeout(200);
+    await at(page, "Many");
+    await back(page);
+    await at(page, "Alpha");
+  });
+
+  test("a slow background check does not undo a delete", async ({ page }) => {
+    const drive = await boot(page);
+    await addLink(page, EDIT_LINK);
+    await page.getByRole("button", { name: "Alpha", exact: true }).click();
+    await at(page, "Alpha");
+    drive.state.slowFolder = "Friend's folder";
+    const before = drive.state.listCalls["Friend's folder"];
+    await back(page);
+    await expect.poll(() => drive.state.listCalls["Friend's folder"]).toBe(before + 1); // slow background check started
+    drive.state.slowFolder = ""; // the refresh after the delete is fast and returns first
+    await page.getByRole("button", { name: "Actions for readme.txt" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
+    await page.waitForTimeout(3500); // both the slow check and the refresh after the delete are done
+    await expect(page.getByRole("button", { name: "readme.txt", exact: true })).toHaveCount(0);
+  });
+
+  test("tapping a button inside the viewer does not toggle focus mode", async ({ page }) => {
+    await gallery(page);
+    await page.getByRole("button", { name: "clip.mp4", exact: true }).click();
+    const button = viewer(page).locator(".slide.current .hint button");
+    await expect(button).toBeVisible();
+    const box = (await button.boundingBox())!;
+    const popup = page.context().waitForEvent("request", (r) => r.url().startsWith("https://onedrive.example/"));
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await popup;
+    expect(await viewer(page).evaluate((d) => d.classList.contains("immersive"))).toBe(false);
+  });
+
+  test("hidden controls cannot be reached with Tab", async ({ page }) => {
+    await gallery(page);
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    const box = (await viewer(page).locator(".stage").boundingBox())!;
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+    await expect.poll(() => viewer(page).locator(".bar").evaluate((b) => getComputedStyle(b).visibility)).toBe("hidden");
+  });
+});

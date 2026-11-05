@@ -62,9 +62,13 @@ https://onedrive.live.com/?redeem=aHR0cHM6Ly8xZHJ2Lm1zL2YvcyFBbUJjRGVGZ2g&id=...
 - The link must allow **editing**. With a view-only link the app only lets you browse and shows "View-only link".
 - Paste the full link exactly as copied.
 
+## Navigating
+
+The browser's Back button, a mouse's back button and the iPhone's swipe from the left edge all go **up one level**: from a photo back to its folder, from a folder to its parent, from the top folder to the Links screen. Back never leaves the app. Folders you've already seen appear instantly when you go back (the app checks OneDrive for changes in the background).
+
 ## Viewing files
 
-Tap a file to open it full screen. Images (including iPhone HEIC photos), videos (MP4/MOV), audio and text files open in the app, as far as the browser can play them. Swipe left/right or use ‹ › to go through the folder. Anything else (PDF, Office, …) opens in OneDrive. If a file can't be shown, the viewer says why (for example the OneDrive error), with a button to open it in OneDrive.
+Tap a file to open it full screen. Images (including iPhone HEIC photos), videos (MP4/MOV), audio and text files open in the app, as far as the browser can play them. Swipe left/right or use ‹ › to go through the folder. Tap the photo or video to hide all buttons; tap again to show them. Anything else (PDF, Office, …) opens in OneDrive. If a file can't be shown, the viewer says why (for example the OneDrive error), with a button to open it in OneDrive.
 
 **Save** prepares the file and then shows **Save / Share**: tap it to open the iOS share sheet ("Save Image" / "Save Video"). Files larger than 200 MB open the download directly instead, to keep the app from running out of memory.
 

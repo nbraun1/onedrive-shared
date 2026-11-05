@@ -227,11 +227,13 @@ async function upload(files: File[]) {
 /* ---------- screens ---------- */
 
 /** quiet: a cached list is already on screen, so only re-render if OneDrive's answer differs. */
+let refreshSeq = 0;
 async function refresh(quiet = false) {
   const folder = current();
+  const my = ++refreshSeq;
   try {
     const list = sortItems(await graph.listChildren(share!.driveId, folder.id));
-    if (folder !== current()) return; // the user moved on while this loaded
+    if (my !== refreshSeq) return; // a newer refresh (or another folder) took over while this loaded
     const same = quiet && signature(list) === signature(items);
     items = list;
     listedAt = Date.now();
@@ -239,7 +241,7 @@ async function refresh(quiet = false) {
     cache.set(cacheKey(folder.id), { items, listedAt });
     if (same) return; // keep the DOM: no thumbnail flicker, scroll stays
   } catch (e) {
-    if (folder !== current()) return;
+    if (my !== refreshSeq) return;
     if (quiet) return toast(errorText(e)); // keep showing the cached list
     status = "failed";
     toast(errorText(e));
@@ -288,6 +290,11 @@ function showState(st: Nav | null) {
     // Back reached the bottom of the app: stay instead of returning to the Microsoft sign-in pages.
     history.pushState({ app: 1, screen: "links" } satisfies Nav, "");
     return renderLinks();
+  }
+  if (st.viewer && !document.querySelector("dialog.viewer[open]")) {
+    // a viewer step without a viewer (reload, Forward after closing): step back onto its folder's own step
+    st = { ...st, viewer: undefined };
+    history.back();
   }
   if (st.screen === "links") return renderLinks();
   const s = shares.find((x) => x.id === st.shareId);
@@ -358,7 +365,8 @@ function view(item: DriveItem) {
   const viewable = items.filter((i) => viewKind(i));
   if (!viewKind(item)) return void window.open(item.webUrl, "_blank", "noopener");
   history.pushState({ ...folderState(path), viewer: true } satisfies Nav, "");
-  const d = openViewer(graph, share!.driveId, viewable, viewable.indexOf(item), listedAt);
+  // by id: a background check may have replaced the item objects behind the rows on screen
+  const d = openViewer(graph, share!.driveId, viewable, viewable.findIndex((i) => i.id === item.id), listedAt);
   // Closed by Close/Esc: drop its history entry. Closed by Back: the entry is already gone.
   d.addEventListener("close", () => (history.state as Nav | null)?.viewer && history.back());
 }
@@ -548,7 +556,7 @@ async function main() {
     return;
   }
   const restored = history.state as Nav | null;
-  if (restored?.app && restored.screen !== "guard") return showState({ ...restored, viewer: false }); // reload
+  if (restored?.app && restored.screen !== "guard") return showState(restored); // reload: the steps below still exist
   history.replaceState({ app: 1, screen: "guard" } satisfies Nav, "");
   history.pushState({ app: 1, screen: "links" } satisfies Nav, "");
   const last = shares.find((s) => s.id === localStorage.getItem("lastShare"));
