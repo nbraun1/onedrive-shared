@@ -277,10 +277,11 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     prev.disabled = index === 0;
     next.disabled = index === files.length - 1;
     if (viewKind(item) === "text" && !current.querySelector("pre, .hint button")) loadText(index, current);
+    d.classList.toggle("photo", viewKind(item) === "image"); // photos take every touch: the app pinches and pans them
     applyZoom();
   }
 
-  /* ---------- zoom (desktop) ---------- */
+  /* ---------- zoom (desktop buttons/wheel/keys; pinch on photos) ---------- */
 
   const zoomable = () => [...(slides.get(index)?.querySelectorAll<HTMLElement>("img, video") ?? [])];
 
@@ -362,15 +363,39 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     setTrack((index - i) * width, true);
   }
 
-  let drag: { x: number; y: number; dx: number; horizontal: boolean | null; pan?: { x: number; y: number } } | null = null;
+  let drag: { id: number; x: number; y: number; dx: number; horizontal: boolean | null; pan?: { x: number; y: number } } | null = null;
+  // The app pinches photos itself: iOS page zoom locks one-finger moves to one axis.
+  const touches = new Map<number, { x: number; y: number }>();
+  let pinch: { dist: number; mid: { x: number; y: number }; z: typeof zoom } | null = null;
+  const pair = () => {
+    const [a, b] = [...touches.values()];
+    const r = stage.getBoundingClientRect();
+    return { dist: Math.hypot(a.x - b.x, a.y - b.y), mid: { x: (a.x + b.x) / 2 - r.left - r.width / 2, y: (a.y + b.y) / 2 - r.top - r.height / 2 } };
+  };
+  /** A finger left: below two, the pinch ends and a remaining finger keeps panning (never a tap or a swipe). */
+  const untouch = (id: number) => {
+    touches.delete(id);
+    if (!pinch || touches.size >= 2) return false;
+    pinch = null;
+    const [rest] = [...touches.entries()];
+    drag = rest && zoom.s > 1 ? { id: rest[0], ...rest[1], dx: 0, horizontal: false, pan: { x: zoom.x, y: zoom.y } } : null;
+    return true;
+  };
   stage.addEventListener("pointerdown", (e) => {
+    if (e.pointerType === "touch") touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (touches.size === 2 && d.classList.contains("photo") && zoomable().length) {
+      if (drag?.horizontal) setTrack(0, true);
+      drag = null;
+      pinch = { ...pair(), z: { ...zoom } };
+      return;
+    }
     if (!e.isPrimary) {
       drag = null; // a second finger means pinch-zoom, not a swipe
       return;
     }
     if (e.button !== 0) return; // a right-click opens the context menu, its pointerup may never come
     if (zoom.s > 1) {
-      drag = { x: e.clientX, y: e.clientY, dx: 0, horizontal: null, pan: { x: zoom.x, y: zoom.y } }; // zoomed: drag pans
+      drag = { id: e.pointerId, x: e.clientX, y: e.clientY, dx: 0, horizontal: null, pan: { x: zoom.x, y: zoom.y } }; // zoomed: drag pans
       return;
     }
     const t = e.target;
@@ -380,10 +405,20 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     }
     if ((window.visualViewport?.scale ?? 1) > 1) return; // zoomed in: one finger pans the photo
     finish();
-    drag = { x: e.clientX, y: e.clientY, dx: 0, horizontal: null };
+    drag = { id: e.pointerId, x: e.clientX, y: e.clientY, dx: 0, horizontal: null };
   });
   stage.addEventListener("pointermove", (e) => {
-    if (!drag || !e.isPrimary) return;
+    if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    if (pinch) {
+      if (touches.size < 2) return;
+      const { dist, mid } = pair();
+      const raw = (pinch.z.s * dist) / pinch.dist;
+      const s = raw < 1.01 ? 1 : Math.min(MAX_ZOOM, raw);
+      const k = s / pinch.z.s; // the photo point that was under the fingers' midpoint follows it
+      zoom = { s, x: mid.x - (pinch.mid.x - pinch.z.x) * k, y: mid.y - (pinch.mid.y - pinch.z.y) * k };
+      return applyZoom();
+    }
+    if (!drag || e.pointerId !== drag.id) return;
     if (e.pointerType === "mouse" && !e.buttons) {
       // released where the stage didn't see it (e.g. over the bar): don't follow a hovering mouse
       if (drag.horizontal) setTrack(0, true);
@@ -415,7 +450,7 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     setTrack(drag.dx, false);
   });
   stage.addEventListener("pointerup", (e) => {
-    if (!drag || !e.isPrimary) return;
+    if (untouch(e.pointerId) || !drag || e.pointerId !== drag.id) return;
     const { dx, horizontal } = drag;
     drag = null;
     if (horizontal === null) {
@@ -427,7 +462,8 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     if (Math.abs(dx) > stage.clientWidth * 0.2) step(dx < 0 ? 1 : -1);
     else setTrack(0, true);
   });
-  stage.addEventListener("pointercancel", () => {
+  stage.addEventListener("pointercancel", (e) => {
+    untouch(e.pointerId);
     drag = null;
     setTrack(0, true);
   });

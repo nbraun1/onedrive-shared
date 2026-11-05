@@ -883,11 +883,11 @@ test.describe("pinch-zoomed on a phone", () => {
     await gallery(page);
     await page.getByRole("button", { name: "photo2.png", exact: true }).click();
     await expect(viewer(page)).toContainText("4 / 5");
-    expect(await touchAction(page)).toBe("pan-y pinch-zoom");
+    expect(await touchAction(page)).toBe("none"); // photos: the app pinches and pans itself
     await setScale(page, 2);
-    expect(await touchAction(page)).toBe("auto");
+    expect(await touchAction(page)).toBe("auto"); // a page still zoomed by the browser can be pinched back out
     await setScale(page, 1);
-    expect(await touchAction(page)).toBe("pan-y pinch-zoom");
+    expect(await touchAction(page)).toBe("none");
     const box = (await viewer(page).locator(".stage").boundingBox())!;
     const y = box.y + box.height / 2;
     await page.mouse.move(box.x + 50, y);
@@ -904,6 +904,75 @@ test.describe("pinch-zoomed on a phone", () => {
     await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
     await expect(viewer(page)).toContainText("3 / 5");
     expect(await touchAction(page)).toBe("auto");
+  });
+});
+
+test.describe("pinching a photo on a phone", () => {
+  test.skip(({ browserName }) => browserName !== "chromium", "multi-touch needs Chromium's CDP");
+  type Pt = { x: number; y: number };
+  const sessions = new WeakMap<Page, Awaited<ReturnType<ReturnType<Page["context"]>["newCDPSession"]>>>(); // one per page: touches live in it
+  async function touch(page: Page, type: "touchStart" | "touchMove" | "touchEnd", points: Pt[]) {
+    if (!sessions.has(page)) sessions.set(page, await page.context().newCDPSession(page));
+    await sessions.get(page)!.send("Input.dispatchTouchEvent", { type, touchPoints: points.map((p, id) => ({ ...p, id })) });
+  }
+  async function pinch(page: Page, from: number, to: number) {
+    const box = (await viewer(page).locator(".stage").boundingBox())!;
+    const c = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    const at = (d: number) => [{ x: c.x - d / 2, y: c.y }, { x: c.x + d / 2, y: c.y }];
+    await touch(page, "touchStart", at(from));
+    for (let i = 1; i <= 5; i++) await touch(page, "touchMove", at(from + ((to - from) * i) / 5));
+    await touch(page, "touchEnd", []);
+    return c;
+  }
+  async function drag(page: Page, from: Pt, dx: number, dy: number) {
+    await touch(page, "touchStart", [from]);
+    for (let i = 1; i <= 5; i++) await touch(page, "touchMove", [{ x: from.x + (dx * i) / 5, y: from.y + (dy * i) / 5 }]);
+    await touch(page, "touchEnd", []);
+  }
+  const zoomOf = async (page: Page) => {
+    const t = await original(page).evaluate((el) => (el as HTMLElement).style.transform);
+    const m = /translate\((-?[\d.]+)px, (-?[\d.]+)px\) scale\(([\d.]+)\)/.exec(t);
+    return m ? { x: Number(m[1]), y: Number(m[2]), s: Number(m[3]) } : null;
+  };
+  const stageTouchAction = (page: Page) => viewer(page).locator(".stage").evaluate((el) => getComputedStyle(el).touchAction);
+
+  async function portrait(page: Page) {
+    await gallery(page);
+    await page.getByRole("button", { name: "photo2.png", exact: true }).click();
+    await expect(original(page)).not.toHaveClass(/loading/);
+  }
+
+  test("photos take every touch themselves, text keeps scrolling", async ({ page }) => {
+    await portrait(page);
+    expect(await stageTouchAction(page)).toBe("none");
+    await page.keyboard.press("ArrowLeft");
+    await page.keyboard.press("ArrowLeft");
+    await expect(viewer(page)).toContainText("2 / 5");
+    expect(await stageTouchAction(page)).toBe("pan-y pinch-zoom");
+  });
+
+  test("two fingers zoom, one finger then moves freely in both directions", async ({ page }) => {
+    await portrait(page);
+    const c = await pinch(page, 100, 200);
+    const z = (await zoomOf(page))!;
+    expect(z.s).toBeCloseTo(2, 1);
+    await expect(viewer(page)).toContainText("4 / 5");
+    await expect(viewer(page)).not.toHaveClass(/immersive/);
+    await drag(page, c, -80, -60);
+    const moved = (await zoomOf(page))!;
+    expect(moved.x - z.x).toBeCloseTo(-80, -1);
+    expect(moved.y - z.y).toBeCloseTo(-60, -1);
+    await drag(page, c, -150, 0);
+    await expect(viewer(page)).toContainText("4 / 5"); // zoomed: no swipe to the next file
+  });
+
+  test("pinching back below fit snaps to fit and swiping works again", async ({ page }) => {
+    await portrait(page);
+    const c = await pinch(page, 100, 200);
+    await pinch(page, 200, 50);
+    expect(await zoomOf(page)).toBeNull();
+    await drag(page, { x: c.x - 120, y: c.y }, 200, 0);
+    await expect(viewer(page)).toContainText("3 / 5");
   });
 });
 
