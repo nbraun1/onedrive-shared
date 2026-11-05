@@ -340,3 +340,37 @@ test("tapping a reorder handle keeps what you typed", async ({ page }) => {
   await page.mouse.up();
   await expect(page.getByLabel("Share link")).toHaveValue("https://1drv.ms/f/s!typed");
 });
+
+test.describe("viewer layout", () => {
+  const noOverflow = (page: Page) =>
+    viewer(page).evaluate((d) => ({
+      v: d.scrollHeight - d.clientHeight,
+      h: d.scrollWidth - d.clientWidth,
+      bottom: Math.round(d.querySelector(".stage")!.getBoundingClientRect().bottom - window.innerHeight),
+    }));
+  for (const [name, desktop] of [["photo2.png", false], ["photo2.png", true], ["song.wav", false]] as const) {
+    test(`${name} fits the screen without scrolling${desktop ? " (desktop)" : ""}`, async ({ page }) => {
+      if (desktop) await page.setViewportSize({ width: 1280, height: 720 });
+      await gallery(page);
+      await page.getByRole("button", { name, exact: true }).click();
+      if (name.endsWith(".png")) await expect.poll(() => viewer(page).locator("img").evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth)).toBeGreaterThan(0);
+      else await expect(viewer(page).locator("audio")).toBeVisible();
+      expect(await noOverflow(page)).toEqual({ v: 0, h: 0, bottom: expect.any(Number) });
+      expect((await noOverflow(page)).bottom).toBeLessThanOrEqual(0);
+    });
+  }
+});
+
+test("the folder page behind the viewer does not scroll", async ({ page }) => {
+  await boot(page);
+  await addLink(page, EDIT_LINK);
+  await page.getByRole("button", { name: "Alpha", exact: true }).click();
+  await page.getByRole("button", { name: "Many", exact: true }).click();
+  await page.getByRole("button", { name: "img10.jpg", exact: true }).click();
+  await expect(viewer(page)).toContainText("1 / 40");
+  const scrollable = () => page.evaluate(() => document.documentElement.scrollHeight > innerHeight && getComputedStyle(document.documentElement).overflowY !== "hidden");
+  expect(await scrollable()).toBe(false);
+  await page.keyboard.press("Escape");
+  await expect(viewer(page)).toHaveCount(0);
+  expect(await scrollable()).toBe(true);
+});

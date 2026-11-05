@@ -35,6 +35,8 @@ export async function fakeOneDrive(page: Page) {
   const gallery = add("Gallery", alpha.id, true);
   for (const f of ["clip.mp4", "doc.pdf", "notes.txt", "photo1.jpg", "photo2.png", "song.wav"]) add(f, gallery.id, false);
   [...nodes.values()].find((n) => n.name === "clip.mp4")!.size = 300 * 1024 * 1024;
+  const many = add("Many", alpha.id, true);
+  for (let i = 10; i < 50; i++) add(`img${i}.jpg`, many.id, false);
   const beta = [...nodes.values()].find((n) => n.name === "Beta")!;
 
   const state = { failList: false, failUploadName: "", delayMs: 0, slowFolder: "", dlDelayMs: 0, failDownloadUrl: false, dlResponse: null as null | { status: number; body: unknown }, dlCalls: 0, dlRequests: [] as { url: string; range?: string }[] };
@@ -125,6 +127,9 @@ export async function fakeOneDrive(page: Page) {
     if (name.endsWith(".txt")) return route.fulfill({ headers, contentType: "text/plain", body: "Hello from notes" });
     if (name.endsWith(".wav")) return route.fulfill({ headers, contentType: "audio/wav", body: WAV });
     if (name.endsWith(".mp4")) return route.fulfill({ headers, contentType: "video/mp4", body: Buffer.from("not a video") });
+    // photo2 is a big portrait image, larger than any test viewport
+    if (name === "photo2.png")
+      return route.fulfill({ headers, contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="3000" height="4000"><rect width="3000" height="4000" fill="teal"/></svg>' });
     return route.fulfill({ headers, contentType: "image/png", body: PNG });
   });
   return { nodes, state, names: (parentName: string) => children([...nodes.values()].find((n) => n.name === parentName)!.id).map((n) => n.name).sort() };
