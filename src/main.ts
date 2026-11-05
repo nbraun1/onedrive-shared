@@ -238,8 +238,8 @@ function menu() {
     h(
       "div",
       { className: "sheet" },
-      h("button", { onclick: () => (d.close(), renderLinks()) }, "Links"),
-      h("button", { onclick: async () => (d.close(), await signOut(), renderLinks()) }, "Sign out"),
+      h("button", { onclick: () => (d.close(), goUp(path.length)) }, "Links"),
+      h("button", { onclick: async () => (d.close(), await signOut(), goUp(path.length)) }, "Sign out"),
       h("button", { onclick: () => d.close() }, "Cancel"),
     ),
   );
@@ -248,8 +248,47 @@ function menu() {
 function openShare(s: SavedShare) {
   share = s;
   localStorage.setItem("lastShare", s.id);
-  return open([{ id: s.itemId, name: s.label }]);
+  const root = [{ id: s.itemId, name: s.label }];
+  history.pushState(folderState(root), "");
+  return open(root);
 }
+
+/* ---------- history: every folder level and an open viewer is one entry, so Back means "up one level" ---------- */
+
+type Nav = { app: 1; screen: "guard" | "links" | "folder"; shareId?: string; path?: Crumb[]; viewer?: boolean };
+const folderState = (p: Crumb[]): Nav => ({ app: 1, screen: "folder", shareId: share!.id, path: p });
+
+function goDown(crumbs: Crumb[]) {
+  history.pushState(folderState(crumbs), "");
+  open(crumbs);
+}
+
+/** Up `levels` folders (path.length = to the Links screen); popstate renders the result. */
+function goUp(levels: number) {
+  if (levels > 0) history.go(-levels);
+}
+
+function showState(st: Nav | null) {
+  if (!st?.app || st.screen === "guard") {
+    // Back reached the bottom of the app: stay instead of returning to the Microsoft sign-in pages.
+    history.pushState({ app: 1, screen: "links" } satisfies Nav, "");
+    return renderLinks();
+  }
+  if (st.screen === "links") return renderLinks();
+  const s = shares.find((x) => x.id === st.shareId);
+  if (!s || !st.path?.length) {
+    history.replaceState({ app: 1, screen: "links" } satisfies Nav, "");
+    return renderLinks();
+  }
+  const same = share?.id === s.id && path.length === st.path.length && path.every((c, i) => c.id === st.path![i].id);
+  share = s;
+  if (!same || !app.querySelector("nav.crumbs")) open(st.path); // e.g. closing the viewer stays put
+}
+
+window.addEventListener("popstate", (e) => {
+  document.querySelectorAll<HTMLDialogElement>("dialog[open]").forEach((d) => d.close());
+  showState(e.state as Nav | null);
+});
 
 function updateShares(list: SavedShare[]) {
   shares = list;
@@ -294,8 +333,11 @@ async function open(crumbs: Crumb[]) {
 
 function view(item: DriveItem) {
   const viewable = items.filter((i) => viewKind(i));
-  if (viewKind(item)) openViewer(graph, share!.driveId, viewable, viewable.indexOf(item), listedAt);
-  else window.open(item.webUrl, "_blank", "noopener");
+  if (!viewKind(item)) return void window.open(item.webUrl, "_blank", "noopener");
+  history.pushState({ ...folderState(path), viewer: true } satisfies Nav, "");
+  const d = openViewer(graph, share!.driveId, viewable, viewable.indexOf(item), listedAt);
+  // Closed by Close/Esc: drop its history entry. Closed by Back: the entry is already gone.
+  d.addEventListener("close", () => (history.state as Nav | null)?.viewer && history.back());
 }
 
 function renderBrowser() {
@@ -303,7 +345,7 @@ function renderBrowser() {
   const crumbs = h(
     "nav",
     { className: "crumbs", "aria-label": "Path" },
-    ...path.map((c, i) => h("button", { onclick: () => open(path.slice(0, i + 1)) }, c.name)),
+    ...path.map((c, i) => h("button", { onclick: () => goUp(path.length - 1 - i) }, c.name)),
   );
   const list = h("ul", { className: "items", "aria-label": "Items" });
   for (const item of items) {
@@ -316,7 +358,7 @@ function renderBrowser() {
       {
         className: "open",
         "aria-label": item.name,
-        onclick: () => (isFolder(item) ? open([...path, { id: item.id, name: item.name }]) : view(item)),
+        onclick: () => (isFolder(item) ? goDown([...path, { id: item.id, name: item.name }]) : view(item)),
       },
       icon,
       h("span", { className: "name" }, item.name, h("small", {}, meta)),
@@ -482,6 +524,10 @@ async function main() {
     app.replaceChildren(h("p", { className: "center error" }, `Sign-in failed: ${errorText(e)}`));
     return;
   }
+  const restored = history.state as Nav | null;
+  if (restored?.app && restored.screen !== "guard") return showState({ ...restored, viewer: false }); // reload
+  history.replaceState({ app: 1, screen: "guard" } satisfies Nav, "");
+  history.pushState({ app: 1, screen: "links" } satisfies Nav, "");
   const last = shares.find((s) => s.id === localStorage.getItem("lastShare"));
   if (last) await openShare(last);
   else renderLinks();

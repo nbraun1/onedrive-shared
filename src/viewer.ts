@@ -394,4 +394,5 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
   }
 
   render();
+  return d;
 }

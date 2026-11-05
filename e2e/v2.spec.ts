@@ -312,8 +312,8 @@ test.describe("reorder links", () => {
     expect(await order(page)).toEqual(["A", "B", "C"]);
     await drag(page, "C", (b) => b.y + 2, "A");
     await expect.poll(() => order(page)).toEqual(["C", "A", "B"]);
-    await page.reload();
-    await openLinks(page);
+    await page.reload(); // stays on the Links screen
+    await expect(page.getByRole("heading", { name: "Links" })).toBeVisible();
     expect(await order(page)).toEqual(["C", "A", "B"]);
     await page.getByRole("button", { name: "B", exact: true }).click();
     await expect(crumbs(page)).toContainText("B");
@@ -551,5 +551,109 @@ test.describe("fast viewer review fixes", () => {
     await page.mouse.move(box.x + box.width * 0.2, box.y - 40, { steps: 3 }); // over the top bar
     await page.mouse.up();
     await expect(viewer(page)).toContainText("4 / 5");
+  });
+});
+
+test.describe("back navigation", () => {
+  const back = (page: Page) => page.evaluate(() => history.back());
+  const at = async (page: Page, folder: string) => expect(crumbs(page).locator("button").last()).toHaveText(folder);
+  const linksScreen = (page: Page) => expect(page.getByRole("heading", { name: "Links" })).toBeVisible();
+  async function toGallery(page: Page) {
+    await boot(page);
+    await addLink(page, EDIT_LINK);
+    await page.getByRole("button", { name: "Alpha", exact: true }).click();
+    await at(page, "Alpha");
+    await page.getByRole("button", { name: "Gallery", exact: true }).click();
+    await at(page, "Gallery");
+  }
+
+  test("goes up one folder at a time and never leaves the app", async ({ page }) => {
+    await toGallery(page);
+    const url = page.url();
+    await back(page);
+    await at(page, "Alpha");
+    await back(page);
+    await at(page, "Friend's folder");
+    await back(page);
+    await linksScreen(page);
+    for (let i = 0; i < 3; i++) {
+      await back(page);
+      await page.waitForTimeout(150);
+    }
+    await linksScreen(page);
+    expect(page.url()).toBe(url);
+  });
+
+  test("back closes the viewer and returns to its folder", async ({ page }) => {
+    await toGallery(page);
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(viewer(page)).toBeVisible();
+    await back(page);
+    await expect(viewer(page)).toHaveCount(0);
+    await at(page, "Gallery");
+  });
+
+  for (const how of ["Close button", "Escape"]) {
+    test(`closing the viewer with the ${how} leaves no extra back step`, async ({ page }) => {
+      await toGallery(page);
+      await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+      await expect(viewer(page)).toBeVisible();
+      if (how === "Escape") await page.keyboard.press("Escape");
+      else await viewer(page).getByRole("button", { name: "Close" }).click();
+      await expect(viewer(page)).toHaveCount(0);
+      await at(page, "Gallery");
+      await expect.poll(() => page.evaluate(() => !!history.state?.viewer)).toBe(false); // the viewer's own back step finished
+      await back(page);
+      await at(page, "Alpha");
+    });
+  }
+
+  test("breadcrumbs go up like back, so back from the root is the Links screen", async ({ page }) => {
+    await toGallery(page);
+    await crumbs(page).getByRole("button", { name: "Friend's folder" }).click();
+    await at(page, "Friend's folder");
+    await back(page);
+    await linksScreen(page);
+  });
+
+  test("Links from the menu, then back, stays in the app", async ({ page }) => {
+    await toGallery(page);
+    await page.getByRole("button", { name: "Menu" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Links" }).click();
+    await linksScreen(page);
+    await back(page);
+    await page.waitForTimeout(150);
+    await linksScreen(page);
+  });
+
+  test("a reload keeps the folder and its back steps", async ({ page }) => {
+    await toGallery(page);
+    await page.reload();
+    await at(page, "Gallery");
+    await back(page);
+    await at(page, "Alpha");
+  });
+
+  test("back closes an open dialog and goes up", async ({ page }) => {
+    await toGallery(page);
+    await page.getByRole("button", { name: "Actions for photo1.jpg" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Rename" }).click();
+    await expect(page.getByRole("textbox", { name: "Name", exact: true })).toBeVisible();
+    await back(page);
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await at(page, "Alpha");
+  });
+
+  test("starting with a saved link, back goes to the Links screen", async ({ page, context }) => {
+    await boot(page);
+    await addLink(page, EDIT_LINK);
+    await at(page, "Friend's folder");
+    const fresh = await context.newPage();
+    await fresh.addInitScript(() => (window.__TEST_TOKEN__ = "test-token"));
+    await fakeOneDrive(fresh);
+    await fresh.goto("./");
+    await at(fresh, "Friend's folder");
+    await back(fresh);
+    await linksScreen(fresh);
   });
 });
