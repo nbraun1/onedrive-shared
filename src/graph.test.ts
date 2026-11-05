@@ -188,13 +188,35 @@ describe("errorText", () => {
 });
 
 describe("getDownloadUrl", () => {
-  it("asks for the pre-authenticated download URL", async () => {
+  it("reads the download URL from a plain item request", async () => {
     const f = fakeFetch(json({ id: "i", "@microsoft.graph.downloadUrl": "https://dl/x" }));
     expect(await createGraph(tokens(), f.fn).getDownloadUrl("d", "i")).toBe("https://dl/x");
-    expect(f.calls[0].url).toBe(`${G}/drives/d/items/i?$select=id,@microsoft.graph.downloadUrl`);
+    expect(f.calls[0].url).toBe(`${G}/drives/d/items/i`);
   });
-  it("fails clearly without one", async () => {
-    const f = fakeFetch(json({ id: "i" }));
-    await expect(createGraph(tokens(), f.fn).getDownloadUrl("d", "i")).rejects.toThrow("OneDrive returned no download address");
+  it("accepts the older @content.downloadUrl name", async () => {
+    const f = fakeFetch(json({ id: "i", "@content.downloadUrl": "https://dl/old" }));
+    expect(await createGraph(tokens(), f.fn).getDownloadUrl("d", "i")).toBe("https://dl/old");
+  });
+  it("fails clearly without one and lists what came back", async () => {
+    const f = fakeFetch(json({ id: "i", name: "a.jpg", file: {} }));
+    await expect(createGraph(tokens(), f.fn).getDownloadUrl("d", "i")).rejects.toThrow(
+      "OneDrive returned no download address (fields: id, name, file)",
+    );
+  });
+});
+
+describe("getPreviewImageUrl", () => {
+  it("asks for a large rendition and prefers the 2048 px one", async () => {
+    const f = fakeFetch(json({ value: [{ c2048x2048: { url: "https://t/big" }, large: { url: "https://t/large" } }] }));
+    expect(await createGraph(tokens(), f.fn).getPreviewImageUrl("d", "i")).toBe("https://t/big");
+    expect(f.calls[0].url).toBe(`${G}/drives/d/items/i/thumbnails?select=c2048x2048,large`);
+  });
+  it("falls back to the large thumbnail", async () => {
+    const f = fakeFetch(json({ value: [{ large: { url: "https://t/large" } }] }));
+    expect(await createGraph(tokens(), f.fn).getPreviewImageUrl("d", "i")).toBe("https://t/large");
+  });
+  it("fails clearly when there is no thumbnail", async () => {
+    const f = fakeFetch(json({ value: [] }));
+    await expect(createGraph(tokens(), f.fn).getPreviewImageUrl("d", "i")).rejects.toThrow("OneDrive has no preview image");
   });
 });

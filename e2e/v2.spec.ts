@@ -264,11 +264,18 @@ test.describe("viewer error details", () => {
     await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
     await expect(viewer(page)).toContainText("Download link: OneDrive error 400 (invalidRequest): Invalid select");
   });
-  test("says when OneDrive returns no download address", async ({ page }) => {
+  test("says which fields came back when a video has no download address", async ({ page }) => {
+    const drive = await gallery(page);
+    drive.state.dlResponse = { status: 200, body: { id: "x", name: "clip.mp4" } };
+    await page.getByRole("button", { name: "clip.mp4", exact: true }).click();
+    await expect(viewer(page)).toContainText("Download link: OneDrive returned no download address (fields: id, name)");
+  });
+  test("shows a large preview of a photo when there is no download address", async ({ page }) => {
     const drive = await gallery(page);
     drive.state.dlResponse = { status: 200, body: { id: "x" } };
     await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
-    await expect(viewer(page)).toContainText("Download link: OneDrive returned no download address");
+    await expect(viewer(page).locator("img")).toHaveAttribute("src", /^https:\/\/thumb\.example\/.*size=2048$/);
+    await expect(viewer(page)).toContainText("Preview");
   });
   test("says when a video cannot be played", async ({ page }) => {
     await gallery(page);

@@ -142,15 +142,16 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     next.disabled = index === files.length - 1;
     clearStage();
     stage.append(h("p", { className: "hint" }, "Loading…"));
+    const kind = viewKind(item);
     let src: string;
     try {
       src = await graph.getDownloadUrl(driveId, item.id); // fresh each time: these URLs expire
     } catch (e) {
+      if (kind === "image" && e instanceof GraphError && e.code === "noDownloadUrl") return showPreview(my, item, e);
       return fail(my, `Download link: ${describe(e)}`);
     }
     if (my !== seq) return;
     save.disabled = false;
-    const kind = viewKind(item);
     let el: HTMLElement;
     if (kind === "image") el = h("img", { src, alt: item.name, draggable: false, onerror: () => fail(my, "Image could not be loaded") });
     else if (kind === "video" || kind === "audio")
@@ -173,6 +174,20 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
       el = h("div", { className: "text" }, h("pre", {}, start.text), cut && h("p", { className: "hint" }, "Only the first 1 MB is shown."));
     }
     stage.replaceChildren(el);
+  }
+
+  // No original available: show OneDrive's large thumbnail instead (Save stays off, it needs the original).
+  async function showPreview(my: number, item: DriveItem, cause: GraphError) {
+    let src: string;
+    try {
+      src = await graph.getPreviewImageUrl(driveId, item.id);
+    } catch (e) {
+      return fail(my, `Download link: ${describe(cause)}; preview: ${describe(e)}`);
+    }
+    if (my !== seq) return;
+    stage.replaceChildren(
+      h("div", { className: "preview" }, h("img", { src, alt: item.name, draggable: false, onerror: () => fail(my, "Preview image could not be loaded") }), h("p", { className: "hint" }, "Preview (reduced size)")),
+    );
   }
 
   async function fetchStart(src: string): Promise<Response> {

@@ -99,9 +99,21 @@ export function createGraph(getToken: GetToken, fetchFn: typeof fetch = (...a) =
     },
 
     async getDownloadUrl(driveId: string, id: string): Promise<string> {
-      const r = await call<{ "@microsoft.graph.downloadUrl"?: string }>(`${item(driveId, id)}?$select=id,@microsoft.graph.downloadUrl`);
-      const url = r["@microsoft.graph.downloadUrl"];
-      if (!url) throw new GraphError(0, "noDownloadUrl", "OneDrive returned no download address");
+      // Plain request: personal OneDrive dropped the address when it was asked for via $select.
+      const r = await call<Record<string, unknown>>(item(driveId, id));
+      const url = r["@microsoft.graph.downloadUrl"] ?? r["@content.downloadUrl"];
+      if (typeof url !== "string")
+        throw new GraphError(0, "noDownloadUrl", `OneDrive returned no download address (fields: ${Object.keys(r).join(", ")})`);
+      return url;
+    },
+
+    /** A large rendition from OneDrive's thumbnail service, for when the original can't be loaded. */
+    async getPreviewImageUrl(driveId: string, id: string): Promise<string> {
+      type Size = { url?: string };
+      const r = await call<{ value: { c2048x2048?: Size; large?: Size }[] }>(`${item(driveId, id)}/thumbnails?select=c2048x2048,large`);
+      const t = r.value?.[0];
+      const url = t?.c2048x2048?.url ?? t?.large?.url;
+      if (!url) throw new GraphError(0, "noPreview", "OneDrive has no preview image");
       return url;
     },
 

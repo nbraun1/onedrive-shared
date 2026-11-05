@@ -88,6 +88,9 @@ export async function fakeOneDrive(page: Page) {
       if (m[2] === state.failUploadName || exists(m[1], m[2])) return conflict(route);
       return json(route, dto(add(m[2], m[1], false)), 201);
     }
+    if ((m = path.match(/^\/drives\/D\/items\/([^/:]+)\/thumbnails$/))) {
+      return json(route, { value: [{ c2048x2048: { url: `https://thumb.example/${m[1]}?size=2048` } }] });
+    }
     if ((m = path.match(/^\/drives\/D\/items\/([^/:]+)$/))) {
       const n = nodes.get(m[1])!;
       if (method === "GET") {
