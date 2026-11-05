@@ -915,8 +915,8 @@ test.describe("pinching a photo on a phone", () => {
     if (!sessions.has(page)) sessions.set(page, await page.context().newCDPSession(page));
     await sessions.get(page)!.send("Input.dispatchTouchEvent", { type, touchPoints: points.map((p, id) => ({ ...p, id })) });
   }
-  async function pinch(page: Page, from: number, to: number) {
-    const box = (await viewer(page).locator(".stage").boundingBox())!;
+  async function pinch(page: Page, from: number, to: number, on = ".stage") {
+    const box = (await viewer(page).locator(on).boundingBox())!;
     const c = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
     const at = (d: number) => [{ x: c.x - d / 2, y: c.y }, { x: c.x + d / 2, y: c.y }];
     await touch(page, "touchStart", at(from));
@@ -964,6 +964,34 @@ test.describe("pinching a photo on a phone", () => {
     expect(moved.y - z.y).toBeCloseTo(-60, -1);
     await drag(page, c, -150, 0);
     await expect(viewer(page)).toContainText("4 / 5"); // zoomed: no swipe to the next file
+  });
+
+  test("a release the stage never saw doesn't turn the next touch into a pinch", async ({ page }) => {
+    await portrait(page);
+    await viewer(page).locator(".stage").evaluate((el) =>
+      el.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, pointerId: 99, pointerType: "touch", isPrimary: true, clientX: 10, clientY: 10 })),
+    );
+    const box = (await viewer(page).locator(".stage").boundingBox())!;
+    const c = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    await touch(page, "touchStart", [c]);
+    await touch(page, "touchEnd", []);
+    await expect(viewer(page)).toHaveClass(/immersive/); // a plain tap, not half a pinch
+  });
+
+  test("the pinch centre is the photo's centre, not the stage's, above the iPhone's home bar", async ({ page }) => {
+    await portrait(page);
+    await page.addStyleTag({ content: ".viewer .stage { padding-bottom: 100px !important } .viewer .track { bottom: 100px !important }" });
+    await pinch(page, 100, 200, ".track");
+    const z = (await zoomOf(page))!;
+    expect(z.s).toBeCloseTo(2, 1);
+    expect(Math.abs(z.y)).toBeLessThan(3); // fingers around the photo's centre: it zooms in place
+  });
+
+  test("while the browser still zooms the page, two fingers are the browser's", async ({ page }) => {
+    await portrait(page);
+    await viewer(page).evaluate((d) => d.classList.add("zoomed"));
+    await pinch(page, 100, 200);
+    expect(await zoomOf(page)).toBeNull();
   });
 
   test("pinching back below fit snaps to fit and swiping works again", async ({ page }) => {

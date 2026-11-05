@@ -289,8 +289,8 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     const els = zoomable();
     if (!els.length) zoom = { s: 1, x: 0, y: 0 }; // e.g. a video that failed and became a message
     // the visible picture, not the element: a photo's <img> fills the stage, its pixels are letterboxed inside
-    const W = stage.clientWidth;
-    const H = stage.clientHeight;
+    const W = track.clientWidth;
+    const H = track.clientHeight; // not the stage: it also holds the home bar inset
     let cw = 0;
     let ch = 0;
     for (const el of els) {
@@ -329,7 +329,7 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
         const r = stage.getBoundingClientRect();
         const dy = e.deltaY * (e.deltaMode === 1 ? 33 : 1); // Firefox reports lines
         // by distance, so a mouse notch (100 px) is one step and a trackpad's many small events add up the same
-        zoomTo(zoom.s * ZOOM_STEP ** (-dy / 100), e.clientX - r.left - r.width / 2, e.clientY - r.top - r.height / 2);
+        zoomTo(zoom.s * ZOOM_STEP ** (-dy / 100), e.clientX - r.left - track.offsetWidth / 2, e.clientY - r.top - track.offsetHeight / 2);
       },
       { passive: false },
     );
@@ -370,7 +370,8 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
   const pair = () => {
     const [a, b] = [...touches.values()];
     const r = stage.getBoundingClientRect();
-    return { dist: Math.hypot(a.x - b.x, a.y - b.y), mid: { x: (a.x + b.x) / 2 - r.left - r.width / 2, y: (a.y + b.y) / 2 - r.top - r.height / 2 } };
+    // the photo's centre is the track's, which ends above the iPhone's home bar inset
+    return { dist: Math.hypot(a.x - b.x, a.y - b.y), mid: { x: (a.x + b.x) / 2 - r.left - track.offsetWidth / 2, y: (a.y + b.y) / 2 - r.top - track.offsetHeight / 2 } };
   };
   /** A finger left: below two, the pinch ends and a remaining finger keeps panning (never a tap or a swipe). */
   const untouch = (id: number) => {
@@ -382,8 +383,13 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     return true;
   };
   stage.addEventListener("pointerdown", (e) => {
+    if (e.isPrimary) {
+      touches.clear(); // no other touch is down: drops one whose release the stage never saw
+      pinch = null;
+    }
     if (e.pointerType === "touch") touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
-    if (touches.size === 2 && d.classList.contains("photo") && zoomable().length) {
+    // while the browser still zooms the page (.zoomed), two fingers are its pinch
+    if (touches.size === 2 && d.classList.contains("photo") && !d.classList.contains("zoomed") && zoomable().length) {
       if (drag?.horizontal) setTrack(0, true);
       drag = null;
       pinch = { ...pair(), z: { ...zoom } };
