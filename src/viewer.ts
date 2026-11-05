@@ -75,19 +75,25 @@ export async function readStart(res: Response, limit: number): Promise<{ text: s
   return { text: new TextDecoder().decode(bytes), cut };
 }
 
-/** Full-screen viewer over the viewable files of a folder, starting at files[start]. */
-export function openViewer(graph: Graph, driveId: string, files: DriveItem[], start: number) {
+/** Full-screen carousel over the viewable files of a folder, starting at files[start]. */
+export function openViewer(graph: Graph, driveId: string, files: DriveItem[], start: number, listedAt: number) {
   let index = start;
-  let seq = 0; // increments per shown file; stale async results compare against it
+  let seq = 0; // increments whenever another file becomes current; stale async results compare against it
   let blob: Blob | null = null;
+  let animating: { to: number; timer: number } | null = null;
+  const urls = new Map<string, Promise<string>>(); // item id -> download URL, resolved at most once
+  const slides = new Map<number, HTMLElement>(); // only index-1..index+1 exist
+  const warmed = new Set<number>();
+  const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
   const title = h("span", { className: "title" });
   const counter = h("span", { className: "counter" });
   const save = h("button", { onclick: () => onSave() }, "Save");
   const openInOneDrive = () => window.open(files[index].webUrl, "_blank", "noopener");
-  const stage = h("div", { className: "stage" });
-  const prev = h("button", { className: "nav prev", "aria-label": "Previous", onclick: () => go(index - 1) }, "‹");
-  const next = h("button", { className: "nav next", "aria-label": "Next", onclick: () => go(index + 1) }, "›");
+  const track = h("div", { className: "track" });
+  const stage = h("div", { className: "stage" }, track);
+  const prev = h("button", { className: "nav prev", "aria-label": "Previous", onclick: () => step(-1) }, "‹");
+  const next = h("button", { className: "nav next", "aria-label": "Next", onclick: () => step(1) }, "›");
   const d = dialog(
     h("div", { className: "bar" }, title, counter, save, h("button", { onclick: openInOneDrive }, "Open in OneDrive"), h("button", { onclick: () => d.close() }, "Close")),
     stage,
@@ -96,16 +102,184 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
   );
   d.className = "viewer";
   d.setAttribute("aria-label", "Viewer");
-  d.addEventListener("close", clearStage);
-  d.addEventListener("keydown", (e) => {
-    if (e.key === "ArrowLeft") go(index - 1);
-    if (e.key === "ArrowRight") go(index + 1);
+  // On window, not the dialog: focus can fall back to <body> when the focused Save button gets disabled.
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "ArrowLeft") step(-1);
+    if (e.key === "ArrowRight") step(1);
+  };
+  window.addEventListener("keydown", onKey);
+  d.addEventListener("close", () => {
+    window.removeEventListener("keydown", onKey);
+    for (const i of [...slides.keys()]) drop(i);
   });
 
-  let swipe: { x: number; y: number } | null = null;
+  const describe = (e: unknown) =>
+    e instanceof GraphError && e.status > 0 ? `OneDrive error ${e.status} (${e.code}): ${e.message}` : e instanceof Error ? e.message : String(e);
+
+  function urlFor(item: DriveItem, fresh = false): Promise<string> {
+    let u = fresh ? undefined : urls.get(item.id);
+    if (!u) {
+      const listed = fresh ? null : listingUrl(item, listedAt, Date.now());
+      u = listed ? Promise.resolve(listed) : graph.getDownloadUrl(driveId, item.id);
+      u.catch(() => urls.delete(item.id)); // let a later attempt retry
+      urls.set(item.id, u);
+    }
+    return u;
+  }
+
+  const message = (lines: string[]) =>
+    h("div", { className: "hint" }, ...lines.map((l, i) => h("p", { className: i ? "reason" : "" }, l)), h("button", { onclick: openInOneDrive }, "Open in OneDrive"));
+
+  /* ---------- slides ---------- */
+
+  function build(i: number): HTMLElement {
+    const item = files[i];
+    const kind = viewKind(item);
+    const slide = h("div", { className: "slide" });
+    const poster = previewUrl(item);
+    if (kind === "image") {
+      const preview = h("img", { className: "preview", alt: "", draggable: false });
+      const note = h("p", { className: "note", hidden: true });
+      const img = h("img", { className: "original loading", alt: item.name, draggable: false, decoding: "async" });
+      slide.append(preview, img, note);
+      const showPreview = (src: string) => (preview.src = src);
+      if (poster) showPreview(poster);
+      const fallback = async (reason: string) => {
+        img.remove();
+        if (!preview.getAttribute("src")) {
+          try {
+            showPreview(await graph.getPreviewImageUrl(driveId, item.id));
+          } catch (e) {
+            return slide.replaceChildren(message(["Can't show this file here", `${reason}; preview: ${describe(e)}`]));
+          }
+        }
+        note.textContent = `Showing preview — original couldn't load (${reason})`;
+        note.hidden = false;
+      };
+      let retried = false;
+      img.onload = () => {
+        img.classList.remove("loading");
+        preview.remove();
+      };
+      img.onerror = () => {
+        // A listing URL may have expired early: try once more with a fresh one.
+        if (!retried) {
+          retried = true;
+          urlFor(item, true).then((u) => (img.src = u), (e) => fallback(`Download link: ${describe(e)}`));
+        } else fallback("Image could not be loaded");
+      };
+      urlFor(item).then((u) => (img.src = u), (e) => fallback(`Download link: ${describe(e)}`));
+    } else if (kind === "video" || kind === "audio") {
+      const media = h(kind, { controls: true, playsInline: true, preload: "none" });
+      if (kind === "video" && poster) media.setAttribute("poster", poster);
+      media.onerror = () =>
+        slide.replaceChildren(message(["Can't show this file here", `${kind === "video" ? "Video" : "Audio"} could not be played (code ${media.error?.code ?? "?"})`]));
+      slide.append(media);
+      urlFor(item).then(
+        (u) => (media.src = u),
+        (e) => slide.replaceChildren(message(["Can't show this file here", `Download link: ${describe(e)}`])),
+      );
+    } else slide.append(h("p", { className: "hint" }, item.name)); // text loads only when it becomes current
+    return slide;
+  }
+
+  async function loadText(i: number, slide: HTMLElement) {
+    const item = files[i];
+    const my = seq;
+    slide.replaceChildren(h("p", { className: "hint" }, "Loading…"));
+    try {
+      const startText = await readStart(await fetchStart(await urlFor(item)), TEXT_LIMIT);
+      if (my !== seq) return;
+      const cut = startText.cut || (item.size ?? 0) > TEXT_LIMIT;
+      slide.replaceChildren(h("div", { className: "text" }, h("pre", {}, startText.text), cut && h("p", { className: "hint" }, "Only the first 1 MB is shown.")));
+    } catch (e) {
+      if (my === seq) slide.replaceChildren(message(["Can't show this file here", `Text: ${describe(e)}`]));
+    }
+  }
+
+  function drop(i: number) {
+    const slide = slides.get(i);
+    if (!slide) return;
+    slide.querySelectorAll("video, audio").forEach((m) => {
+      const media = m as HTMLMediaElement;
+      media.pause();
+      media.removeAttribute("src");
+      media.load();
+    });
+    slide.querySelectorAll("img").forEach((img) => img.removeAttribute("src")); // frees decoded memory on iOS
+    slide.remove();
+    slides.delete(i);
+  }
+
+  /** Lays out index-1..index+1, drops everything else and warms the cache for photos at index±2. */
+  function render() {
+    const keep = new Set(slideWindow(index, files.length, 1));
+    for (const i of [...slides.keys()]) if (!keep.has(i)) drop(i);
+    for (const i of keep) {
+      let slide = slides.get(i);
+      if (!slide) {
+        slide = build(i);
+        slides.set(i, slide);
+        track.append(slide);
+      }
+      slide.style.transform = `translateX(${(i - index) * 100}%)`;
+      slide.classList.toggle("current", i === index);
+      slide.querySelectorAll("video, audio").forEach((m) => {
+        const media = m as HTMLMediaElement;
+        if (i === index) media.preload = "metadata";
+        else media.pause();
+      });
+    }
+    for (const i of slideWindow(index, files.length, 2))
+      if (!keep.has(i) && !warmed.has(i) && viewKind(files[i]) === "image") {
+        warmed.add(i);
+        urlFor(files[i]).then((u) => (new Image().src = u), () => {});
+      }
+    const current = slides.get(index)!;
+    const item = files[index];
+    blob = null;
+    save.textContent = "Save";
+    save.disabled = true;
+    const my = seq;
+    urlFor(item).then(() => my === seq && (save.disabled = false), () => {});
+    title.textContent = item.name;
+    counter.textContent = `${index + 1} / ${files.length}`;
+    prev.disabled = index === 0;
+    next.disabled = index === files.length - 1;
+    if (viewKind(item) === "text" && !current.querySelector("pre, .hint button")) loadText(index, current);
+  }
+
+  /* ---------- moving ---------- */
+
+  const setTrack = (px: number, animate: boolean) => {
+    track.style.transition = animate && !reduceMotion ? "transform 200ms ease-out" : "none";
+    track.style.transform = `translateX(${px}px)`;
+  };
+
+  function finish() {
+    if (!animating) return;
+    clearTimeout(animating.timer);
+    index = animating.to;
+    animating = null;
+    seq++;
+    setTrack(0, false);
+    render();
+  }
+
+  /** Relative to where the viewer ends up: a press during an animation completes it first. */
+  function step(delta: number) {
+    finish();
+    const i = index + delta;
+    if (i < 0 || i >= files.length || i === index) return setTrack(0, true);
+    const width = stage.clientWidth;
+    animating = { to: i, timer: window.setTimeout(finish, reduceMotion ? 0 : 200) };
+    setTrack((index - i) * width, true);
+  }
+
+  let drag: { x: number; y: number; dx: number; horizontal: boolean | null } | null = null;
   stage.addEventListener("pointerdown", (e) => {
     if (!e.isPrimary) {
-      swipe = null; // a second finger means pinch-zoom, not a swipe
+      drag = null; // a second finger means pinch-zoom, not a swipe
       return;
     }
     const t = e.target;
@@ -113,102 +287,31 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
       const r = t.getBoundingClientRect();
       if (e.clientY > r.top + r.height * 0.75) return; // the controls live at the bottom
     }
-    swipe = { x: e.clientX, y: e.clientY };
+    finish();
+    drag = { x: e.clientX, y: e.clientY, dx: 0, horizontal: null };
+  });
+  stage.addEventListener("pointermove", (e) => {
+    if (!drag || !e.isPrimary) return;
+    const dx = e.clientX - drag.x;
+    const dy = e.clientY - drag.y;
+    if (drag.horizontal === null && Math.abs(dx) + Math.abs(dy) > 8) drag.horizontal = Math.abs(dx) > Math.abs(dy);
+    if (!drag.horizontal) return;
+    const edge = (dx > 0 && index === 0) || (dx < 0 && index === files.length - 1);
+    drag.dx = edge ? dx / 3 : dx; // resist past the first and last file
+    setTrack(drag.dx, false);
   });
   stage.addEventListener("pointerup", (e) => {
-    if (!swipe || !e.isPrimary) return;
-    const dx = e.clientX - swipe.x;
-    const dy = e.clientY - swipe.y;
-    swipe = null;
-    if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) go(index + (dx < 0 ? 1 : -1));
+    if (!drag || !e.isPrimary) return;
+    const { dx, horizontal } = drag;
+    drag = null;
+    if (!horizontal) return;
+    if (Math.abs(dx) > stage.clientWidth * 0.2) step(dx < 0 ? 1 : -1);
+    else setTrack(0, true);
   });
-  stage.addEventListener("pointercancel", () => (swipe = null));
-
-  function go(i: number) {
-    if (i < 0 || i >= files.length || i === index) return;
-    index = i;
-    show();
-  }
-
-  function clearStage() {
-    stage.querySelectorAll("video, audio").forEach((m) => {
-      const media = m as HTMLMediaElement;
-      media.pause();
-      media.removeAttribute("src");
-      media.load();
-    });
-    stage.replaceChildren();
-  }
-
-  function fail(my: number, reason: string) {
-    if (my !== seq) return;
-    clearStage();
-    stage.append(
-      h("div", { className: "hint" }, h("p", {}, "Can't show this file here"), h("p", { className: "reason" }, reason), h("button", { onclick: openInOneDrive }, "Open in OneDrive")),
-    );
-  }
-  const describe = (e: unknown) =>
-    e instanceof GraphError && e.status > 0 ? `OneDrive error ${e.status} (${e.code}): ${e.message}` : e instanceof Error ? e.message : String(e);
-
-  async function show() {
-    const my = ++seq;
-    const item = files[index];
-    blob = null;
-    save.textContent = "Save";
-    save.disabled = true; // until the file has loaded
-    title.textContent = item.name;
-    counter.textContent = `${index + 1} / ${files.length}`;
-    prev.disabled = index === 0;
-    next.disabled = index === files.length - 1;
-    clearStage();
-    stage.append(h("p", { className: "hint" }, "Loading…"));
-    const kind = viewKind(item);
-    let src: string;
-    try {
-      src = await graph.getDownloadUrl(driveId, item.id); // fresh each time: these URLs expire
-    } catch (e) {
-      if (kind === "image" && e instanceof GraphError && e.code === "noDownloadUrl") return showPreview(my, item, e);
-      return fail(my, `Download link: ${describe(e)}`);
-    }
-    if (my !== seq) return;
-    save.disabled = false;
-    let el: HTMLElement;
-    if (kind === "image") el = h("img", { src, alt: item.name, draggable: false, onerror: () => fail(my, "Image could not be loaded") });
-    else if (kind === "video" || kind === "audio")
-      el = h(kind, {
-        src,
-        controls: true,
-        playsInline: true,
-        preload: "metadata",
-        onerror: (e: Event | string) => fail(my, `${kind === "video" ? "Video" : "Audio"} could not be played (code ${((e as Event).target as HTMLMediaElement).error?.code ?? "?"})`),
-      });
-    else {
-      let start: { text: string; cut: boolean };
-      try {
-        start = await readStart(await fetchStart(src), TEXT_LIMIT);
-      } catch (e) {
-        return fail(my, `Text: ${describe(e)}`);
-      }
-      if (my !== seq) return;
-      const cut = start.cut || (item.size ?? 0) > TEXT_LIMIT;
-      el = h("div", { className: "text" }, h("pre", {}, start.text), cut && h("p", { className: "hint" }, "Only the first 1 MB is shown."));
-    }
-    stage.replaceChildren(el);
-  }
-
-  // No original available: show OneDrive's large thumbnail instead (Save stays off, it needs the original).
-  async function showPreview(my: number, item: DriveItem, cause: GraphError) {
-    let src: string;
-    try {
-      src = await graph.getPreviewImageUrl(driveId, item.id);
-    } catch (e) {
-      return fail(my, `Download link: ${describe(cause)}; preview: ${describe(e)}`);
-    }
-    if (my !== seq) return;
-    stage.replaceChildren(
-      h("div", { className: "preview" }, h("img", { src, alt: item.name, draggable: false, onerror: () => fail(my, "Preview image could not be loaded") }), h("p", { className: "hint" }, "Preview (reduced size)")),
-    );
-  }
+  stage.addEventListener("pointercancel", () => {
+    drag = null;
+    setTrack(0, true);
+  });
 
   async function fetchStart(src: string): Promise<Response> {
     let res: Response;
@@ -220,7 +323,6 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     return res;
   }
-
   async function onSave() {
     const item = files[index];
     if (blob) return shareBlob(blob, item.name);
@@ -279,5 +381,5 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     setTimeout(() => URL.revokeObjectURL(a.href), 10_000);
   }
 
-  show();
+  render();
 }

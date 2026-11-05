@@ -88,8 +88,10 @@ test.describe("saved links", () => {
   });
 });
 
-async function gallery(page: Page) {
+type Drive = Awaited<ReturnType<typeof fakeOneDrive>>;
+async function gallery(page: Page, setup?: (state: Drive["state"]) => void) {
   const drive = await boot(page);
+  setup?.(drive.state);
   await addLink(page, EDIT_LINK);
   await page.getByRole("button", { name: "Alpha", exact: true }).click();
   await page.getByRole("button", { name: "Gallery", exact: true }).click();
@@ -97,6 +99,7 @@ async function gallery(page: Page) {
   return drive;
 }
 const viewer = (page: Page) => page.getByRole("dialog", { name: "Viewer" });
+const original = (page: Page) => viewer(page).locator(".slide.current img.original");
 
 test("shows thumbnails for files, not for folders", async ({ page }) => {
   await boot(page);
@@ -114,8 +117,8 @@ test.describe("viewer", () => {
     const drive = await gallery(page);
     await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
     await expect(viewer(page)).toContainText("3 / 5");
-    const img = viewer(page).locator("img");
-    await expect(img).toHaveAttribute("src", new RegExp(`photo1\\.jpg\\?v=${drive.state.dlCalls}$`));
+    await expect(original(page)).toHaveAttribute("src", /photo1\.jpg\?l=1$/);
+    expect(drive.state.itemGets).toBe(0); // the listing already carried the download URL
     await viewer(page).getByRole("button", { name: "Next" }).click();
     await expect(viewer(page)).toContainText("photo2.png");
     await expect(viewer(page)).toContainText("4 / 5");
@@ -164,7 +167,7 @@ test.describe("viewer", () => {
     const drive = await gallery(page);
     await page.getByRole("button", { name: "notes.txt", exact: true }).click();
     await expect(viewer(page).locator("pre")).toHaveText("Hello from notes");
-    expect(drive.state.dlRequests.at(-1)!.range).toBe("bytes=0-1048575");
+    expect(drive.state.dlRequests.find((r) => r.url.includes("notes.txt"))!.range).toBe("bytes=0-1048575");
   });
 
   test("a video the browser cannot play shows a way out", async ({ page }) => {
@@ -174,11 +177,12 @@ test.describe("viewer", () => {
     await expect(viewer(page).getByRole("button", { name: "Open in OneDrive" }).first()).toBeVisible();
   });
 
-  test("a failing download URL shows a way out", async ({ page }) => {
-    const drive = await gallery(page);
-    drive.state.failDownloadUrl = true;
+  test("a failing download URL keeps the preview and says why", async ({ page }) => {
+    await gallery(page, (s) => ((s.listingUrls = false), (s.failDownloadUrl = true)));
     await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
-    await expect(viewer(page)).toContainText("Can't show this file here");
+    await expect(viewer(page).locator(".slide.current")).toContainText("Showing preview");
+    await expect(viewer(page).locator(".slide.current")).toContainText("OneDrive error 500");
+    await expect(viewer(page).locator(".slide.current img.preview")).toBeVisible();
   });
 
   test("files the browser cannot show open in OneDrive", async ({ page }) => {
@@ -190,17 +194,16 @@ test.describe("viewer", () => {
   });
 
   test("fast stepping ends on the right file", async ({ page }) => {
-    const drive = await gallery(page);
+    await gallery(page, (s) => ((s.listingUrls = false), (s.dlDelayMs = 400)));
     await page.getByRole("button", { name: "clip.mp4", exact: true }).click();
     await expect(viewer(page)).toContainText("1 / 5");
-    drive.state.dlDelayMs = 800;
     await viewer(page).getByRole("button", { name: "Next" }).click();
     await viewer(page).getByRole("button", { name: "Next" }).click();
     await expect(viewer(page)).toContainText("3 / 5");
-    await expect(viewer(page).locator("img")).toHaveAttribute("src", /photo1\.jpg/);
+    await expect(original(page)).toHaveAttribute("src", /photo1\.jpg/);
     await page.waitForTimeout(1000);
-    await expect(viewer(page).locator("img")).toHaveAttribute("src", /photo1\.jpg/);
-    await expect(viewer(page).locator("pre")).toHaveCount(0);
+    await expect(original(page)).toHaveAttribute("src", /photo1\.jpg/);
+    await expect(viewer(page).locator(".slide.current pre")).toHaveCount(0);
   });
 
   test("big files are saved through the download URL directly", async ({ page }) => {
@@ -230,16 +233,17 @@ test.describe("viewer on a desktop browser", () => {
 
 test.describe("viewer review fixes", () => {
   test("Save waits for the file and uses a fresh download URL", async ({ page }) => {
-    const drive = await gallery(page);
-    drive.state.dlDelayMs = 800;
+    const drive = await gallery(page, (s) => ((s.listingUrls = false), (s.dlDelayMs = 800)));
     await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
     await expect(viewer(page).getByRole("button", { name: "Save" })).toBeDisabled();
-    await expect(viewer(page).locator("img")).toBeVisible();
+    await expect(original(page)).toBeVisible();
     drive.state.dlDelayMs = 0;
-    const shown = drive.state.dlCalls;
+    await page.waitForTimeout(1000); // neighbours finish resolving their URLs
+    const before = drive.state.itemGets;
     await viewer(page).getByRole("button", { name: "Save" }).click();
     await expect(viewer(page).getByRole("button", { name: "Save / Share" })).toBeVisible();
-    expect(drive.state.dlRequests.at(-1)!.url).toContain(`?v=${shown + 1}`);
+    expect(drive.state.itemGets).toBe(before + 1); // Save asked for a fresh URL
+    expect(drive.state.dlRequests.some((r) => r.url.includes(`photo1.jpg?v=${drive.state.dlCalls}`))).toBe(true);
   });
 
   test("a second finger does not count as a swipe", async ({ page }) => {
@@ -259,23 +263,23 @@ test.describe("viewer review fixes", () => {
 
 test.describe("viewer error details", () => {
   test("shows OneDrive's error for the download link", async ({ page }) => {
-    const drive = await gallery(page);
+    const drive = await gallery(page, (s) => (s.listingUrls = false));
     drive.state.dlResponse = { status: 400, body: { error: { code: "invalidRequest", message: "Invalid select" } } };
     await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
     await expect(viewer(page)).toContainText("Download link: OneDrive error 400 (invalidRequest): Invalid select");
   });
   test("says which fields came back when a video has no download address", async ({ page }) => {
-    const drive = await gallery(page);
+    const drive = await gallery(page, (s) => (s.listingUrls = false));
     drive.state.dlResponse = { status: 200, body: { id: "x", name: "clip.mp4" } };
     await page.getByRole("button", { name: "clip.mp4", exact: true }).click();
     await expect(viewer(page)).toContainText("Download link: OneDrive returned no download address (fields: id, name)");
   });
-  test("shows a large preview of a photo when there is no download address", async ({ page }) => {
-    const drive = await gallery(page);
+  test("asks OneDrive for a preview when the listing has none and there is no download address", async ({ page }) => {
+    const drive = await gallery(page, (s) => ((s.listingUrls = false), (s.noThumbs = true)));
     drive.state.dlResponse = { status: 200, body: { id: "x" } };
     await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
-    await expect(viewer(page).locator("img")).toHaveAttribute("src", /^https:\/\/thumb\.example\/.*size=2048$/);
-    await expect(viewer(page)).toContainText("Preview");
+    await expect(viewer(page).locator(".slide.current img.preview")).toHaveAttribute("src", /^https:\/\/thumb\.example\/.*size=2048$/);
+    await expect(viewer(page)).toContainText("Showing preview");
   });
   test("says when a video cannot be played", async ({ page }) => {
     await gallery(page);
@@ -353,7 +357,7 @@ test.describe("viewer layout", () => {
       if (desktop) await page.setViewportSize({ width: 1280, height: 720 });
       await gallery(page);
       await page.getByRole("button", { name, exact: true }).click();
-      if (name.endsWith(".png")) await expect.poll(() => viewer(page).locator("img").evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth)).toBeGreaterThan(0);
+      if (name.endsWith(".png")) await expect.poll(() => original(page).evaluate((i: HTMLImageElement) => i.complete && i.naturalWidth)).toBeGreaterThan(0);
       else await expect(viewer(page).locator("audio")).toBeVisible();
       expect(await noOverflow(page)).toEqual({ v: 0, h: 0, bottom: expect.any(Number) });
       expect((await noOverflow(page)).bottom).toBeLessThanOrEqual(0);
@@ -373,4 +377,105 @@ test("the folder page behind the viewer does not scroll", async ({ page }) => {
   await page.keyboard.press("Escape");
   await expect(viewer(page)).toHaveCount(0);
   expect(await scrollable()).toBe(true);
+});
+
+test.describe("fast viewer", () => {
+  const slides = (page: Page) => viewer(page).locator(".slide");
+  async function drag(page: Page, fraction: number) {
+    const box = (await viewer(page).locator(".stage").boundingBox())!;
+    const y = box.y + box.height / 2;
+    const x = box.x + box.width * 0.8;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x - box.width * fraction, y, { steps: 6 });
+    await page.mouse.up();
+  }
+
+  test("shows the preview instantly, then the original", async ({ page }) => {
+    await gallery(page, (s) => (s.dlFileDelayMs = 1500));
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(viewer(page).locator(".slide.current img.preview")).toHaveAttribute("src", /s=large$/, { timeout: 1000 });
+    await expect(viewer(page).locator(".slide.current img.preview")).toBeVisible({ timeout: 1000 });
+    await expect(viewer(page).locator(".slide.current img.preview")).toHaveCount(0, { timeout: 5000 });
+    await expect(original(page)).toBeVisible();
+  });
+
+  test("preloads nearby photos but not videos, audio or text", async ({ page }) => {
+    const drive = await gallery(page);
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect.poll(() => drive.state.dlRequests.some((r) => r.url.includes("photo2.png"))).toBe(true);
+    const fetched = drive.state.dlRequests.map((r) => r.url);
+    for (const name of ["clip.mp4", "notes.txt", "song.wav"]) expect(fetched.some((u) => u.includes(name))).toBe(false);
+  });
+
+  test("falls back to asking OneDrive when the listing has no download URL", async ({ page }) => {
+    const drive = await gallery(page, (s) => (s.listingUrls = false));
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(original(page)).toHaveAttribute("src", /\?v=\d+$/);
+    expect(drive.state.itemGets).toBeGreaterThan(0);
+    await page.keyboard.press("ArrowRight");
+    await expect(viewer(page)).toContainText("4 / 5");
+    await page.waitForTimeout(300);
+    const after = drive.state.itemGets;
+    await page.keyboard.press("ArrowLeft");
+    await expect(viewer(page)).toContainText("3 / 5");
+    await page.waitForTimeout(300);
+    expect(drive.state.itemGets).toBe(after);
+  });
+
+  test("asks OneDrive again when the listing is older than 50 minutes", async ({ page }) => {
+    await page.clock.install();
+    const drive = await gallery(page);
+    await page.clock.fastForward("51:00");
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(original(page)).toHaveAttribute("src", /\?v=\d+$/);
+    expect(drive.state.itemGets).toBeGreaterThan(0);
+  });
+
+  test("keeps the preview when the original fails", async ({ page }) => {
+    await gallery(page, (s) => (s.failOriginal = "photo1.jpg"));
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(viewer(page).locator(".slide.current")).toContainText("Showing preview");
+    await expect(viewer(page).locator(".slide.current img.preview")).toBeVisible();
+  });
+
+  test("a short drag snaps back, a long one moves on", async ({ page }) => {
+    await gallery(page);
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(viewer(page)).toContainText("3 / 5");
+    await drag(page, 0.1);
+    await page.waitForTimeout(400);
+    await expect(viewer(page)).toContainText("3 / 5");
+    await drag(page, 0.6);
+    await expect(viewer(page)).toContainText("4 / 5");
+    expect(await slides(page).count()).toBeLessThanOrEqual(3);
+  });
+
+  test("a big folder keeps at most three slides", async ({ page }) => {
+    await boot(page);
+    await addLink(page, EDIT_LINK);
+    await page.getByRole("button", { name: "Alpha", exact: true }).click();
+    await page.getByRole("button", { name: "Many", exact: true }).click();
+    await page.getByRole("button", { name: "img20.jpg", exact: true }).click();
+    for (let i = 0; i < 6; i++) await page.keyboard.press("ArrowRight");
+    await expect(viewer(page)).toContainText("17 / 40");
+    expect(await slides(page).count()).toBeLessThanOrEqual(3);
+  });
+
+  test("videos show a still at once and audio stops when swiped away", async ({ page }) => {
+    await gallery(page);
+    // the test clip is unplayable, so check it as the not-yet-loaded neighbour of notes.txt
+    await page.getByRole("button", { name: "notes.txt", exact: true }).click();
+    const neighbour = viewer(page).locator(".slide:not(.current) video");
+    await expect(neighbour).toHaveAttribute("poster", /s=large$/);
+    await expect(neighbour).toHaveJSProperty("preload", "none");
+    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "song.wav", exact: true }).click();
+    const audio = viewer(page).locator(".slide.current audio");
+    await expect(audio).toBeVisible();
+    await audio.evaluate((a: HTMLAudioElement) => a.play().catch(() => {}));
+    await page.keyboard.press("ArrowLeft");
+    await expect(viewer(page)).toContainText("4 / 5");
+    await expect.poll(() => viewer(page).locator("audio").evaluateAll((els) => els.every((a) => (a as HTMLAudioElement).paused))).toBe(true);
+  });
 });

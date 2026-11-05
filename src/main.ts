@@ -19,6 +19,7 @@ let items: DriveItem[] = [];
 let selected: Set<string> | null = null; // null = not in select mode
 let status: "loading" | "failed" | "ready" = "loading";
 let busy = false; // a batch move/delete is running
+let listedAt = 0; // when `items` was fetched; download URLs in it expire
 
 // Kept across re-renders so upload failures stay visible after the list refreshes.
 const uploads = h("section", { className: "uploads", "aria-label": "Uploads", role: "region" });
@@ -222,6 +223,7 @@ async function refresh() {
     const list = sortItems(await graph.listChildren(share!.driveId, folder.id));
     if (folder !== current()) return; // the user moved on while this loaded
     items = list;
+    listedAt = Date.now();
     status = "ready";
   } catch (e) {
     if (folder !== current()) return;
@@ -292,7 +294,7 @@ async function open(crumbs: Crumb[]) {
 
 function view(item: DriveItem) {
   const viewable = items.filter((i) => viewKind(i));
-  if (viewKind(item)) openViewer(graph, share!.driveId, viewable, viewable.indexOf(item));
+  if (viewKind(item)) openViewer(graph, share!.driveId, viewable, viewable.indexOf(item), listedAt);
   else window.open(item.webUrl, "_blank", "noopener");
 }
 

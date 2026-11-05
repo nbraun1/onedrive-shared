@@ -39,7 +39,7 @@ export async function fakeOneDrive(page: Page) {
   for (let i = 10; i < 50; i++) add(`img${i}.jpg`, many.id, false);
   const beta = [...nodes.values()].find((n) => n.name === "Beta")!;
 
-  const state = { failList: false, failUploadName: "", delayMs: 0, slowFolder: "", dlDelayMs: 0, failDownloadUrl: false, dlResponse: null as null | { status: number; body: unknown }, dlCalls: 0, dlRequests: [] as { url: string; range?: string }[] };
+  const state = { failList: false, failUploadName: "", delayMs: 0, slowFolder: "", dlDelayMs: 0, failDownloadUrl: false, dlResponse: null as null | { status: number; body: unknown }, dlCalls: 0, itemGets: 0, listingUrls: true, noThumbs: false, dlFileDelayMs: 0, failOriginal: "", dlRequests: [] as { url: string; range?: string }[] };
   const children = (id: string) => [...nodes.values()].filter((n) => n.parent === id);
   const exists = (parent: string, name: string, except?: string) =>
     children(parent).some((n) => n.name.toLowerCase() === name.toLowerCase() && n.id !== except);
@@ -55,7 +55,14 @@ export async function fakeOneDrive(page: Page) {
     parentReference: { driveId: "D", id: n.parent },
     ...(n.folder
       ? { folder: { childCount: children(n.id).length } }
-      : { file: { mimeType: MIME[n.name.split(".").pop()!] ?? "application/octet-stream" }, thumbnails: n.name === "readme.txt" ? [] : [{ small: { url: `https://thumb.example/${n.id}` } }] }),
+      : {
+          file: { mimeType: MIME[n.name.split(".").pop()!] ?? "application/octet-stream" },
+          thumbnails:
+            n.name === "readme.txt" || state.noThumbs
+              ? []
+              : [{ small: { url: `https://thumb.example/${n.id}` }, medium: { url: `https://thumb.example/${n.id}?s=medium` }, large: { url: `https://thumb.example/${n.id}?s=large` } }],
+          ...(state.listingUrls ? { "@microsoft.graph.downloadUrl": `https://dl.example/${n.id}/${encodeURIComponent(n.name)}?l=1` } : {}),
+        }),
   });
   const remove = (id: string) => {
     children(id).forEach((c) => remove(c.id));
@@ -96,6 +103,7 @@ export async function fakeOneDrive(page: Page) {
     if ((m = path.match(/^\/drives\/D\/items\/([^/:]+)$/))) {
       const n = nodes.get(m[1])!;
       if (method === "GET") {
+        state.itemGets++;
         if (state.dlDelayMs) await new Promise((r) => setTimeout(r, state.dlDelayMs));
         if (state.failDownloadUrl) return json(route, { error: { code: "generalException", message: "boom" } }, 500);
         if (state.dlResponse) return json(route, state.dlResponse.body, state.dlResponse.status);
@@ -119,11 +127,13 @@ export async function fakeOneDrive(page: Page) {
     return route.fulfill({ status: 500, body: `unexpected ${method} ${path}` });
   });
   await page.route("https://thumb.example/**", (route) => route.fulfill({ contentType: "image/png", body: PNG }));
-  await page.route("https://dl.example/**", (route) => {
+  await page.route("https://dl.example/**", async (route) => {
     const req = route.request();
     state.dlRequests.push({ url: req.url(), range: req.headers()["range"] });
     const name = decodeURIComponent(new URL(req.url()).pathname.split("/").pop()!);
     const headers = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "*" };
+    if (state.dlFileDelayMs) await new Promise((r) => setTimeout(r, state.dlFileDelayMs));
+    if (name === state.failOriginal) return route.fulfill({ headers, status: 500, body: "nope" });
     if (name.endsWith(".txt")) return route.fulfill({ headers, contentType: "text/plain", body: "Hello from notes" });
     if (name.endsWith(".wav")) return route.fulfill({ headers, contentType: "audio/wav", body: WAV });
     if (name.endsWith(".mp4")) return route.fulfill({ headers, contentType: "video/mp4", body: Buffer.from("not a video") });
