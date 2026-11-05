@@ -81,7 +81,8 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
   let seq = 0; // increments whenever another file becomes current; stale async results compare against it
   let blob: Blob | null = null;
   let animating: { to: number; timer: number } | null = null;
-  const urls = new Map<string, Promise<string>>(); // item id -> download URL, resolved at most once
+  const urls = new Map<string, { url: Promise<string>; at: number }>(); // item id -> download URL, resolved once per TTL
+  let closed = false;
   const slides = new Map<number, HTMLElement>(); // only index-1..index+1 exist
   const warmed = new Set<number>();
   const reduceMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
@@ -109,6 +110,10 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
   };
   window.addEventListener("keydown", onKey);
   d.addEventListener("close", () => {
+    closed = true;
+    seq++; // stops a running Save and late async results
+    if (animating) clearTimeout(animating.timer);
+    animating = null;
     window.removeEventListener("keydown", onKey);
     for (const i of [...slides.keys()]) drop(i);
   });
@@ -117,14 +122,14 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     e instanceof GraphError && e.status > 0 ? `OneDrive error ${e.status} (${e.code}): ${e.message}` : e instanceof Error ? e.message : String(e);
 
   function urlFor(item: DriveItem, fresh = false): Promise<string> {
-    let u = fresh ? undefined : urls.get(item.id);
-    if (!u) {
-      const listed = fresh ? null : listingUrl(item, listedAt, Date.now());
-      u = listed ? Promise.resolve(listed) : graph.getDownloadUrl(driveId, item.id);
-      u.catch(() => urls.delete(item.id)); // let a later attempt retry
-      urls.set(item.id, u);
-    }
-    return u;
+    const cached = urls.get(item.id);
+    if (!fresh && cached && Date.now() - cached.at < LISTING_URL_TTL) return cached.url;
+    const listed = fresh ? null : listingUrl(item, listedAt, Date.now());
+    const url = listed ? Promise.resolve(listed) : graph.getDownloadUrl(driveId, item.id);
+    const entry = { url, at: listed ? listedAt : Date.now() };
+    url.catch(() => urls.get(item.id) === entry && urls.delete(item.id)); // let a later attempt retry
+    urls.set(item.id, entry);
+    return url;
   }
 
   const message = (lines: string[]) =>
@@ -136,6 +141,7 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     const item = files[i];
     const kind = viewKind(item);
     const slide = h("div", { className: "slide" });
+    const live = () => slides.get(i) === slide; // false once dropped: late URLs must not start downloads
     const poster = previewUrl(item);
     if (kind === "image") {
       const preview = h("img", { className: "preview", alt: "", draggable: false });
@@ -165,10 +171,10 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
         // A listing URL may have expired early: try once more with a fresh one.
         if (!retried) {
           retried = true;
-          urlFor(item, true).then((u) => (img.src = u), (e) => fallback(`Download link: ${describe(e)}`));
+          urlFor(item, true).then((u) => live() && (img.src = u), (e) => void (live() && fallback(`Download link: ${describe(e)}`)));
         } else fallback("Image could not be loaded");
       };
-      urlFor(item).then((u) => (img.src = u), (e) => fallback(`Download link: ${describe(e)}`));
+      urlFor(item).then((u) => live() && (img.src = u), (e) => void (live() && fallback(`Download link: ${describe(e)}`)));
     } else if (kind === "video" || kind === "audio") {
       const media = h(kind, { controls: true, playsInline: true, preload: "none" });
       if (kind === "video" && poster) media.setAttribute("poster", poster);
@@ -176,8 +182,8 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
         slide.replaceChildren(message(["Can't show this file here", `${kind === "video" ? "Video" : "Audio"} could not be played (code ${media.error?.code ?? "?"})`]));
       slide.append(media);
       urlFor(item).then(
-        (u) => (media.src = u),
-        (e) => slide.replaceChildren(message(["Can't show this file here", `Download link: ${describe(e)}`])),
+        (u) => live() && (media.src = u),
+        (e) => live() && slide.replaceChildren(message(["Can't show this file here", `Download link: ${describe(e)}`])),
       );
     } else slide.append(h("p", { className: "hint" }, item.name)); // text loads only when it becomes current
     return slide;
@@ -224,6 +230,7 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
       }
       slide.style.transform = `translateX(${(i - index) * 100}%)`;
       slide.classList.toggle("current", i === index);
+      slide.inert = i !== index;
       slide.querySelectorAll("video, audio").forEach((m) => {
         const media = m as HTMLMediaElement;
         if (i === index) media.preload = "metadata";
@@ -233,7 +240,7 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     for (const i of slideWindow(index, files.length, 2))
       if (!keep.has(i) && !warmed.has(i) && viewKind(files[i]) === "image") {
         warmed.add(i);
-        urlFor(files[i]).then((u) => (new Image().src = u), () => {});
+        urlFor(files[i]).then((u) => !closed && Math.abs(i - index) <= 2 && (new Image().src = u), () => {});
       }
     const current = slides.get(index)!;
     const item = files[index];
@@ -241,7 +248,8 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     save.textContent = "Save";
     save.disabled = true;
     const my = seq;
-    urlFor(item).then(() => my === seq && (save.disabled = false), () => {});
+    const enable = () => my === seq && (save.disabled = false); // Save fetches its own fresh URL anyway
+    urlFor(item).then(enable, enable);
     title.textContent = item.name;
     counter.textContent = `${index + 1} / ${files.length}`;
     prev.disabled = index === 0;
@@ -263,6 +271,7 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
     animating = null;
     seq++;
     setTrack(0, false);
+    void track.offsetWidth; // flush, so a following animation starts from the new layout
     render();
   }
 
@@ -287,8 +296,10 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
       const r = t.getBoundingClientRect();
       if (e.clientY > r.top + r.height * 0.75) return; // the controls live at the bottom
     }
+    if ((window.visualViewport?.scale ?? 1) > 1) return; // zoomed in: one finger pans the photo
     finish();
     drag = { x: e.clientX, y: e.clientY, dx: 0, horizontal: null };
+    stage.setPointerCapture?.(e.pointerId); // keep getting the release outside the photo
   });
   stage.addEventListener("pointermove", (e) => {
     if (!drag || !e.isPrimary) return;
@@ -348,10 +359,11 @@ export function openViewer(graph: Graph, driveId: string, files: DriveItem[], st
       const total = Number(res.headers.get("Content-Length")) || item.size || 0;
       const chunks: Uint8Array[] = [];
       let got = 0;
-      for (const reader = res.body.getReader(); ; ) {
+      const reader = res.body.getReader();
+      for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        if (my !== seq) return;
+        if (my !== seq) return void reader.cancel(); // swiped away or closed: stop downloading
         chunks.push(value);
         got += value.length;
         if (total) save.textContent = `Preparing… ${Math.round((got / total) * 100)}%`;

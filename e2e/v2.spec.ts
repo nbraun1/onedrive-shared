@@ -479,3 +479,77 @@ test.describe("fast viewer", () => {
     await expect.poll(() => viewer(page).locator("audio").evaluateAll((els) => els.every((a) => (a as HTMLAudioElement).paused))).toBe(true);
   });
 });
+
+test.describe("fast viewer review fixes", () => {
+  async function many(page: Page, setup?: (s: Drive["state"]) => void) {
+    const drive = await boot(page);
+    setup?.(drive.state);
+    await addLink(page, EDIT_LINK);
+    await page.getByRole("button", { name: "Alpha", exact: true }).click();
+    await page.getByRole("button", { name: "Many", exact: true }).click();
+    await page.getByRole("button", { name: "img20.jpg", exact: true }).click();
+    return drive;
+  }
+  const fetchedNames = (drive: Drive) => drive.state.dlRequests.map((r) => decodeURIComponent(new URL(r.url).pathname.split("/").pop()!));
+
+  test("closing during the slide animation loads nothing more", async ({ page }) => {
+    const drive = await many(page);
+    await expect(viewer(page)).toContainText("11 / 40");
+    await page.waitForTimeout(300);
+    await viewer(page).getByRole("button", { name: "Next" }).click();
+    await page.keyboard.press("Escape");
+    await page.waitForTimeout(600);
+    expect(fetchedNames(drive)).not.toContain("img23.jpg");
+  });
+
+  test("slides dropped while their URL was loading do not download", async ({ page }) => {
+    const drive = await many(page, (s) => ((s.listingUrls = false), (s.dlDelayMs = 500)));
+    for (let i = 0; i < 4; i++) await page.keyboard.press("ArrowRight");
+    await expect(viewer(page)).toContainText("15 / 40");
+    await page.waitForTimeout(2000);
+    const names = fetchedNames(drive);
+    for (const gone of ["img18.jpg", "img19.jpg", "img20.jpg", "img21.jpg"]) expect(names).not.toContain(gone);
+    expect(names).toContain("img24.jpg");
+  });
+
+  test("a cached URL older than 50 minutes is fetched again", async ({ page }) => {
+    await page.clock.install();
+    const drive = await gallery(page);
+    await page.getByRole("button", { name: "song.wav", exact: true }).click();
+    await expect(viewer(page)).toContainText("5 / 5");
+    for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowLeft");
+    await expect(viewer(page)).toContainText("2 / 5");
+    await page.clock.fastForward("51:00");
+    for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowRight");
+    await expect(viewer(page)).toContainText("5 / 5");
+    await expect(viewer(page).locator(".slide.current audio")).toHaveAttribute("src", /\?v=\d+$/);
+    expect(drive.state.itemGets).toBeGreaterThan(0);
+  });
+
+  test("Save stays usable when the download link failed", async ({ page }) => {
+    await gallery(page, (s) => ((s.listingUrls = false), (s.failDownloadUrl = true)));
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(viewer(page).locator(".slide.current")).toContainText("Showing preview");
+    await expect(viewer(page).getByRole("button", { name: "Save" })).toBeEnabled();
+  });
+
+  test("off-screen slides are hidden from screen readers", async ({ page }) => {
+    await gallery(page);
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    await expect(viewer(page).locator(".slide[inert]")).toHaveCount(2);
+    await expect(viewer(page).locator(".slide.current")).not.toHaveAttribute("inert");
+  });
+
+  test("a drag released outside the photo still completes", async ({ page }) => {
+    await gallery(page);
+    await page.getByRole("button", { name: "photo1.jpg", exact: true }).click();
+    const box = (await viewer(page).locator(".stage").boundingBox())!;
+    const y = box.y + box.height / 2;
+    await page.mouse.move(box.x + box.width * 0.8, y);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width * 0.2, y, { steps: 6 });
+    await page.mouse.move(box.x + box.width * 0.2, box.y - 40, { steps: 3 }); // over the top bar
+    await page.mouse.up();
+    await expect(viewer(page)).toContainText("4 / 5");
+  });
+});
