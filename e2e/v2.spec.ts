@@ -657,3 +657,64 @@ test.describe("back navigation", () => {
     await linksScreen(fresh);
   });
 });
+
+test.describe("folder cache", () => {
+  const at = async (page: Page, folder: string) => expect(crumbs(page).locator("button").last()).toHaveText(folder);
+  const back = (page: Page) => page.evaluate(() => history.back());
+
+  test("going back shows the folder at once, then checks for changes once", async ({ page }) => {
+    const drive = await boot(page);
+    await addLink(page, EDIT_LINK);
+    await expect(page.getByRole("button", { name: "readme.txt", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: "Alpha", exact: true }).click();
+    await at(page, "Alpha");
+    drive.state.slowFolder = "Friend's folder"; // the background check is slow; the cached list must not wait for it
+    const before = drive.state.listCalls["Friend's folder"];
+    await crumbs(page).getByRole("button", { name: "Friend's folder" }).click();
+    await expect(page.getByRole("button", { name: "readme.txt", exact: true })).toBeVisible({ timeout: 500 });
+    await expect(page.getByText("Loading…")).toHaveCount(0);
+    await expect.poll(() => drive.state.listCalls["Friend's folder"]).toBe(before + 1);
+  });
+
+  test("back keeps the scroll position", async ({ page }) => {
+    await boot(page);
+    await addLink(page, EDIT_LINK);
+    await page.getByRole("button", { name: "Alpha", exact: true }).click();
+    await page.getByRole("button", { name: "Many", exact: true }).click();
+    await expect(page.getByRole("button", { name: "img49.jpg", exact: true })).toBeAttached();
+    await page.evaluate(() => scrollTo(0, 600));
+    await page.getByRole("button", { name: "Deep", exact: true }).evaluate((b: HTMLElement) => b.click()); // click without scrolling
+    await at(page, "Deep");
+    expect(await page.evaluate(() => scrollY)).toBe(0); // a newly opened folder starts at the top
+    await back(page);
+    await at(page, "Many");
+    await expect.poll(() => page.evaluate(() => Math.round(scrollY))).toBe(600);
+  });
+
+  test("changes made in the app are not hidden by the cache", async ({ page }) => {
+    await boot(page);
+    await addLink(page, EDIT_LINK);
+    await page.getByRole("button", { name: "Alpha", exact: true }).click();
+    await page.getByRole("button", { name: "Actions for a.txt" }).click();
+    await page.getByRole("dialog").getByRole("button", { name: "Rename" }).click();
+    await page.getByRole("textbox", { name: "Name", exact: true }).fill("b.txt");
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByRole("button", { name: "b.txt", exact: true })).toBeVisible();
+    await back(page);
+    await at(page, "Friend's folder");
+    await page.getByRole("button", { name: "Alpha", exact: true }).click();
+    await expect(page.getByRole("button", { name: "b.txt", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "a.txt", exact: true })).toHaveCount(0);
+  });
+
+  test("changes made elsewhere appear after the background check", async ({ page }) => {
+    const drive = await boot(page);
+    await addLink(page, EDIT_LINK);
+    await page.getByRole("button", { name: "Alpha", exact: true }).click();
+    await at(page, "Alpha");
+    const root = [...drive.nodes.values()].find((n) => n.name === "Friend's folder")!;
+    drive.add("Added elsewhere", root.id, true);
+    await back(page);
+    await expect(page.getByRole("button", { name: "Added elsewhere", exact: true })).toBeVisible();
+  });
+});

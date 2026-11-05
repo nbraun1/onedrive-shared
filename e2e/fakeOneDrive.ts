@@ -37,9 +37,10 @@ export async function fakeOneDrive(page: Page) {
   [...nodes.values()].find((n) => n.name === "clip.mp4")!.size = 300 * 1024 * 1024;
   const many = add("Many", alpha.id, true);
   for (let i = 10; i < 50; i++) add(`img${i}.jpg`, many.id, false);
+  add("deep.txt", add("Deep", many.id, true).id, false);
   const beta = [...nodes.values()].find((n) => n.name === "Beta")!;
 
-  const state = { failList: false, failUploadName: "", delayMs: 0, slowFolder: "", dlDelayMs: 0, failDownloadUrl: false, dlResponse: null as null | { status: number; body: unknown }, dlCalls: 0, itemGets: 0, listingUrls: true, noThumbs: false, dlFileDelayMs: 0, failOriginal: "", dlRequests: [] as { url: string; range?: string }[] };
+  const state = { failList: false, failUploadName: "", delayMs: 0, slowFolder: "", dlDelayMs: 0, failDownloadUrl: false, dlResponse: null as null | { status: number; body: unknown }, dlCalls: 0, itemGets: 0, listCalls: {} as Record<string, number>, listingUrls: true, noThumbs: false, dlFileDelayMs: 0, failOriginal: "", dlRequests: [] as { url: string; range?: string }[] };
   const children = (id: string) => [...nodes.values()].filter((n) => n.parent === id);
   const exists = (parent: string, name: string, except?: string) =>
     children(parent).some((n) => n.name.toLowerCase() === name.toLowerCase() && n.id !== except);
@@ -85,6 +86,8 @@ export async function fakeOneDrive(page: Page) {
     }
     if ((m = path.match(/^\/drives\/D\/items\/([^/:]+)\/children$/))) {
       if (method === "GET") {
+        const folderName = nodes.get(m[1])!.name;
+        state.listCalls[folderName] = (state.listCalls[folderName] ?? 0) + 1;
         if (nodes.get(m[1])?.name === state.slowFolder) await new Promise((r) => setTimeout(r, 1500));
         if (state.failList) return json(route, { error: { code: "generalException", message: "Server exploded" } }, 500);
         return json(route, { value: children(m[1]).map(dto) });
@@ -142,5 +145,5 @@ export async function fakeOneDrive(page: Page) {
       return route.fulfill({ headers, contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" width="3000" height="4000"><rect width="3000" height="4000" fill="teal"/></svg>' });
     return route.fulfill({ headers, contentType: "image/png", body: PNG });
   });
-  return { nodes, state, names: (parentName: string) => children([...nodes.values()].find((n) => n.name === parentName)!.id).map((n) => n.name).sort() };
+  return { nodes, state, add, names: (parentName: string) => children([...nodes.values()].find((n) => n.name === parentName)!.id).map((n) => n.name).sort() };
 }

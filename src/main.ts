@@ -20,6 +20,11 @@ let selected: Set<string> | null = null; // null = not in select mode
 let status: "loading" | "failed" | "ready" = "loading";
 let busy = false; // a batch move/delete is running
 let listedAt = 0; // when `items` was fetched; download URLs in it expire
+// Folders already seen, shown at once when going back and then checked in the background.
+const cache = new Map<string, { items: DriveItem[]; listedAt: number }>();
+const cacheKey = (folderId: string) => `${share!.driveId}:${folderId}`;
+const signature = (list: DriveItem[]) =>
+  JSON.stringify(list.map((i) => [i.id, i.name, i.size, i.lastModifiedDateTime, i.folder?.childCount]));
 
 // Kept across re-renders so upload failures stay visible after the list refreshes.
 const uploads = h("section", { className: "uploads", "aria-label": "Uploads", role: "region" });
@@ -164,6 +169,7 @@ async function rename(item: DriveItem) {
   } catch (e) {
     toast(errorText(e, name));
   }
+  cache.clear(); // something changed in OneDrive: no cached folder may hide it
   await refresh();
 }
 
@@ -175,6 +181,7 @@ async function newFolder() {
   } catch (e) {
     toast(errorText(e, name));
   }
+  cache.clear(); // something changed in OneDrive: no cached folder may hide it
   await refresh();
 }
 
@@ -193,6 +200,7 @@ async function each(list: DriveItem[], op: (i: DriveItem) => Promise<unknown>) {
   if (failed.length) toast(`Failed: ${failed.join("; ")}`);
   busy = false;
   selected = null;
+  cache.clear(); // something changed in OneDrive: no cached folder may hide it
   await refresh();
 }
 
@@ -212,21 +220,27 @@ async function upload(files: File[]) {
   uploads.replaceChildren(...files.map((f) => h("div", { className: "upload" }, h("span", {}, f.webkitRelativePath || f.name), bars.get(f)!)));
   const failures = await uploadMany(graph, share!.driveId, current().id, files, (f, x) => (bars.get(f)!.value = x));
   uploads.replaceChildren(...failures.map((f) => h("p", { className: "error" }, `${f.file.webkitRelativePath || f.file.name}: ${f.error}`)));
+  cache.clear(); // something changed in OneDrive: no cached folder may hide it
   await refresh();
 }
 
 /* ---------- screens ---------- */
 
-async function refresh() {
+/** quiet: a cached list is already on screen, so only re-render if OneDrive's answer differs. */
+async function refresh(quiet = false) {
   const folder = current();
   try {
     const list = sortItems(await graph.listChildren(share!.driveId, folder.id));
     if (folder !== current()) return; // the user moved on while this loaded
+    const same = quiet && signature(list) === signature(items);
     items = list;
     listedAt = Date.now();
     status = "ready";
+    cache.set(cacheKey(folder.id), { items, listedAt });
+    if (same) return; // keep the DOM: no thumbnail flicker, scroll stays
   } catch (e) {
     if (folder !== current()) return;
+    if (quiet) return toast(errorText(e)); // keep showing the cached list
     status = "failed";
     toast(errorText(e));
   }
@@ -261,6 +275,7 @@ const folderState = (p: Crumb[]): Nav => ({ app: 1, screen: "folder", shareId: s
 function goDown(crumbs: Crumb[]) {
   history.pushState(folderState(crumbs), "");
   open(crumbs);
+  scrollTo(0, 0); // a newly opened folder starts at the top; Back restores the old position
 }
 
 /** Up `levels` folders (path.length = to the Links screen); popstate renders the result. */
@@ -325,6 +340,14 @@ function linkActions(s: SavedShare) {
 async function open(crumbs: Crumb[]) {
   path = crumbs;
   selected = null;
+  const hit = cache.get(cacheKey(current().id));
+  if (hit) {
+    items = hit.items;
+    listedAt = hit.listedAt;
+    status = "ready";
+    renderBrowser();
+    return refresh(true);
+  }
   items = [];
   status = "loading";
   renderBrowser();
