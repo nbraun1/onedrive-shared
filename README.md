@@ -8,6 +8,7 @@ A small web app (PWA) to manage a OneDrive folder a friend shared with you, from
 - Rename and move files and folders, one at a time or several selected at once
 - Save several share links under your own names and switch between them
 - View images, videos, audio and text files in the app (swipe or arrows to the next file, Save to Photos); thumbnails in the list
+- Optional app lock with Face ID, fingerprint or the device passcode (menu → App lock; off by default, locks immediately, after 1 or 5 minutes away). It hides the app from someone holding your unlocked phone; it does not encrypt anything. Needs iOS 16+. If the unlock stops working, Sign out on the lock screen resets the app.
 
 It only talks to the Microsoft Graph OneDrive API, directly from your device. There is no server and no secret.
 

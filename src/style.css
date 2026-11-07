@@ -121,3 +121,11 @@ dialog.viewer.zoomed .stage { touch-action: auto; } /* pinch-zoomed: one finger 
 /* focus mode: a tap on the photo hides everything but the photo */
 .viewer .bar, .viewer .nav, .viewer .slide .note { transition: opacity 150ms, visibility 150ms; }
 dialog.viewer.immersive .bar, dialog.viewer.immersive .nav, dialog.viewer.immersive .slide .note { opacity: 0; visibility: hidden; } /* hidden: out of Tab order too */
+
+dialog.lock {
+  width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; border-radius: 0;
+  padding: calc(15vh + env(safe-area-inset-top)) 24px 24px;
+}
+dialog.lock::backdrop { background: var(--bg); }
+dialog.lock > * { max-width: 420px; margin-inline: auto; }
+.sheet [aria-checked="true"] { border-color: var(--accent); color: var(--accent); }

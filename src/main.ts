@@ -7,6 +7,7 @@ import { uploadMany } from "./upload";
 import { dialog, h } from "./dom";
 import { addShare, loadShares, moveShare, removeShare, renameShare, saveShares, validateLabel, type SavedShare } from "./shares";
 import { openViewer, viewKind } from "./viewer";
+import { createPasskey, isDue, loadLock, lockAvailable, saveLock, verifyPasskey } from "./lock";
 
 type Crumb = { id: string; name: string };
 
@@ -255,6 +256,7 @@ function menu() {
       "div",
       { className: "sheet" },
       h("button", { onclick: () => (d.close(), goUp(path.length)) }, "Links"),
+      h("button", { onclick: () => (d.close(), lockSettings()) }, "App lock"),
       h("button", { onclick: async () => (d.close(), await signOut(), goUp(path.length)) }, "Sign out"),
       h("button", { onclick: () => d.close() }, "Cancel"),
     ),
@@ -532,11 +534,111 @@ function renderLinks() {
     }
   };
   app.replaceChildren(
-    h("header", {}, h("h1", {}, "Links"), h("button", { onclick: async () => (await signOut(), renderLinks()) }, "Sign out")),
+    h(
+      "header",
+      {},
+      h("h1", {}, "Links"),
+      h("button", { onclick: () => lockSettings() }, "App lock"),
+      h("button", { onclick: async () => (await signOut(), renderLinks()) }, "Sign out"),
+    ),
     list,
     form,
   );
 }
+
+const LOCK_CHOICES: [string, number | null][] = [
+  ["Off", null],
+  ["Immediately", 0],
+  ["After 1 minute", 60_000],
+  ["After 5 minutes", 300_000],
+];
+
+async function lockSettings() {
+  const available = await lockAvailable();
+  const current = loadLock();
+  const choose = async (delay: number | null) => {
+    const now = loadLock();
+    if (delay === null) saveLock(null);
+    else if (now) saveLock({ id: now.id, delay });
+    else {
+      try {
+        saveLock({ id: await createPasskey(), delay });
+        toast("App lock on");
+      } catch {
+        toast("App lock not turned on");
+      }
+    }
+    d.close();
+  };
+  const d = dialog(
+    h("h2", {}, "App lock"),
+    h("p", {}, available ? "Lock with Face ID, fingerprint or the device passcode" : "This device can't lock the app"),
+    h(
+      "div",
+      { className: "sheet", role: "radiogroup", "aria-label": "Lock" },
+      ...LOCK_CHOICES.map(([label, delay]) =>
+        h(
+          "button",
+          {
+            role: "radio",
+            "aria-checked": String((current?.delay ?? null) === delay),
+            disabled: !available && delay !== null,
+            onclick: () => choose(delay),
+          },
+          label,
+        ),
+      ),
+    ),
+    h("div", { className: "buttons" }, h("button", { onclick: () => d.close() }, "Cancel")),
+  );
+}
+
+let lockDialog: HTMLDialogElement | null = null;
+
+function showLock() {
+  const lock = loadLock();
+  if (!lock || lockDialog) return;
+  const message = h("p", { className: "error", role: "alert" });
+  let unlocked = false;
+  const unlock = async () => {
+    message.textContent = "";
+    button.disabled = true; // a second tap would start a second, rejected prompt
+    const ok = await verifyPasskey(lock.id);
+    button.disabled = false;
+    if (!ok) return void (message.textContent = "Not unlocked. Try again.");
+    localStorage.removeItem("lockHiddenAt");
+    unlocked = true;
+    lockDialog?.close();
+  };
+  const reset = async () => {
+    if (!(await confirmDelete("Sign out and remove saved links and the app lock?", "Sign out"))) return;
+    localStorage.clear();
+    await signOut();
+    location.reload();
+  };
+  const button = h("button", { className: "primary", onclick: unlock }, "Unlock");
+  lockDialog = dialog(h("h1", {}, "Locked"), message, h("div", { className: "sheet" }, button, h("button", { onclick: reset }, "Sign out")));
+  lockDialog.className = "lock";
+  lockDialog.addEventListener("cancel", (e) => e.preventDefault()); // Escape must not unlock
+  // Browsers may let a repeated Escape close it anyway: reopen unless unlocked.
+  lockDialog.addEventListener("close", () => ((lockDialog = null), unlocked || showLock()));
+}
+
+// No recorded leave time locks only at a cold start: after an unlock the Face ID sheet's late "visible" must not lock again.
+const lockIfDue = (coldStart: boolean) => {
+  const lock = loadLock();
+  const at = localStorage.getItem("lockHiddenAt");
+  if (lock && (at !== null || coldStart) && isDue(at === null ? null : Number(at), Date.now(), lock.delay)) showLock();
+};
+
+document.addEventListener("visibilitychange", () => {
+  const lock = loadLock();
+  if (!lock) return;
+  if (document.visibilityState === "hidden") {
+    if (!lockDialog) localStorage.setItem("lockHiddenAt", String(Date.now()));
+    if (lock.delay === 0) showLock(); // covers the app switcher snapshot
+  } else lockIfDue(false);
+});
 
 async function main() {
   const clientId = import.meta.env.VITE_CLIENT_ID;
@@ -555,6 +657,7 @@ async function main() {
     app.replaceChildren(h("p", { className: "center error" }, `Sign-in failed: ${errorText(e)}`));
     return;
   }
+  lockIfDue(true);
   const restored = history.state as Nav | null;
   if (restored?.app && restored.screen !== "guard") return showState(restored); // reload: the steps below still exist
   history.replaceState({ app: 1, screen: "guard" } satisfies Nav, "");
